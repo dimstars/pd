@@ -29,6 +29,7 @@ type BasicCluster struct {
 	sync.RWMutex
 	Stores  *StoresInfo
 	Regions *RegionsInfo
+	NewRegions *RegionsInfo
 }
 
 // NewBasicCluster creates a BasicCluster.
@@ -161,7 +162,10 @@ const randomRegionMaxRetry = 10
 // RandFollowerRegion returns a random region that has a follower on the store.
 func (bc *BasicCluster) RandFollowerRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo {
 	bc.RLock()
-	regions := bc.Regions.RandFollowerRegions(storeID, ranges, randomRegionMaxRetry)
+	regions := bc.NewRegions.RandFollowerRegions(storeID, ranges, randomRegionMaxRetry)
+	if regions == nil {
+		regions = bc.Regions.RandFollowerRegions(storeID, ranges, randomRegionMaxRetry)
+	}
 	bc.RUnlock()
 	return bc.selectRegion(regions, opts...)
 }
@@ -169,7 +173,10 @@ func (bc *BasicCluster) RandFollowerRegion(storeID uint64, ranges []KeyRange, op
 // RandLeaderRegion returns a random region that has leader on the store.
 func (bc *BasicCluster) RandLeaderRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo {
 	bc.RLock()
-	regions := bc.Regions.RandLeaderRegions(storeID, ranges, randomRegionMaxRetry)
+	regions := bc.NewRegions.RandLeaderRegions(storeID, ranges, randomRegionMaxRetry)
+	if regions == nil {
+		regions = bc.Regions.RandLeaderRegions(storeID, ranges, randomRegionMaxRetry)
+	}
 	bc.RUnlock()
 	return bc.selectRegion(regions, opts...)
 }
@@ -177,7 +184,10 @@ func (bc *BasicCluster) RandLeaderRegion(storeID uint64, ranges []KeyRange, opts
 // RandPendingRegion returns a random region that has a pending peer on the store.
 func (bc *BasicCluster) RandPendingRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo {
 	bc.RLock()
-	regions := bc.Regions.RandPendingRegions(storeID, ranges, randomRegionMaxRetry)
+	regions := bc.NewRegions.RandPendingRegions(storeID, ranges, randomRegionMaxRetry)
+	if regions == nil {
+		regions = bc.Regions.RandPendingRegions(storeID, ranges, randomRegionMaxRetry)
+	}
 	bc.RUnlock()
 	return bc.selectRegion(regions, opts...)
 }
@@ -185,7 +195,10 @@ func (bc *BasicCluster) RandPendingRegion(storeID uint64, ranges []KeyRange, opt
 // RandLearnerRegion returns a random region that has a learner peer on the store.
 func (bc *BasicCluster) RandLearnerRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo {
 	bc.RLock()
-	regions := bc.Regions.RandLearnerRegions(storeID, ranges, randomRegionMaxRetry)
+	regions := bc.NewRegions.RandLearnerRegions(storeID, ranges, randomRegionMaxRetry)
+	if regions == nil {
+		regions = bc.Regions.RandLearnerRegions(storeID, ranges, randomRegionMaxRetry)
+	}
 	bc.RUnlock()
 	return bc.selectRegion(regions, opts...)
 }
@@ -315,6 +328,7 @@ func (bc *BasicCluster) PreCheckPutRegion(region *RegionInfo) (*RegionInfo, erro
 func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	bc.Lock()
 	defer bc.Unlock()
+	bc.NewRegions.SetRegion(region)
 	return bc.Regions.SetRegion(region)
 }
 
@@ -333,6 +347,7 @@ func (bc *BasicCluster) CheckAndPutRegion(region *RegionInfo) []*RegionInfo {
 func (bc *BasicCluster) RemoveRegion(region *RegionInfo) {
 	bc.Lock()
 	defer bc.Unlock()
+	bc.NewRegions.RemoveRegion(region)
 	bc.Regions.RemoveRegion(region)
 }
 
