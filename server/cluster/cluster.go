@@ -723,6 +723,13 @@ func (c *RaftCluster) GetStoreRegions(storeID uint64) []*core.RegionInfo {
 	return c.core.GetStoreRegions(storeID)
 }
 
+
+// new******************************
+func (c *RaftCluster) RandNewRegion(storeID uint64, ranges []core.KeyRange, opts ...core.RegionOption) *core.RegionInfo {
+	return c.core.RandNewRegion(storeID, ranges, opts...)
+}
+
+
 // RandLeaderRegion returns a random region that has leader on the store.
 func (c *RaftCluster) RandLeaderRegion(storeID uint64, ranges []core.KeyRange, opts ...core.RegionOption) *core.RegionInfo {
 	return c.core.RandLeaderRegion(storeID, ranges, opts...)

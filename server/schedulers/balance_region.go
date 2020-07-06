@@ -148,6 +148,7 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) []*operator.Opera
 		for i := 0; i < balanceRegionRetryLimit; i++ {
 			// Priority pick the region that has a pending peer.
 			// Pending region may means the disk is overload, remove the pending region firstly.
+			cluster.RandNewRegion(sourceID, s.conf.Ranges, opt.HealthAllowPending(cluster), opt.ReplicatedRegion(cluster))
 			region := cluster.RandPendingRegion(sourceID, s.conf.Ranges, opt.HealthAllowPending(cluster), opt.ReplicatedRegion(cluster))
 			if region == nil {
 				// Then pick the region that has a follower in the source store.
