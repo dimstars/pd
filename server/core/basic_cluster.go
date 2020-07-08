@@ -160,6 +160,7 @@ func (bc *BasicCluster) UpdateStoreStatus(storeID uint64, leaderCount int, regio
 
 const randomRegionMaxRetry = 10
 
+// RandNewRegion returns a random region in new region set.
 func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo {
 	regions := bc.NewRegions.RandPendingRegions(storeID, ranges, randomRegionMaxRetry)
 	region := bc.selectRegion(regions, opts...)
