@@ -162,6 +162,7 @@ const randomRegionMaxRetry = 10
 
 // RandNewRegion returns a random region in new region set.
 func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo {
+	bc.RLock()
 	regions := bc.NewRegions.RandPendingRegions(storeID, ranges, randomRegionMaxRetry)
 	region := bc.selectRegion(regions, opts...)
 	if region == nil {
@@ -176,6 +177,7 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, opts ..
 		regions = bc.NewRegions.RandLearnerRegions(storeID, ranges, randomRegionMaxRetry)
 		region = bc.selectRegion(regions, opts...)
 	}
+	bc.RUnlock()
 	return region
 }
 
@@ -391,6 +393,7 @@ func (bc *BasicCluster) GetOverlaps(region *RegionInfo) []*RegionInfo {
 // RegionSetInformer provides access to a shared informer of regions.
 type RegionSetInformer interface {
 	GetRegionCount() int
+	RandNewRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo
 	RandFollowerRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo
 	RandLeaderRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo
 	RandLearnerRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo
