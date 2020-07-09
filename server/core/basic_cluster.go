@@ -161,24 +161,31 @@ func (bc *BasicCluster) UpdateStoreStatus(storeID uint64, leaderCount int, regio
 const randomRegionMaxRetry = 10
 
 // RandNewRegion returns a random region in new region set.
-func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo {
+func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPending RegionOption, optOther RegionOption, opts ...RegionOption) *RegionInfo {
 	bc.RLock()
+	opts1 := append(opts, optPending)
+	opts2 := append(opts, optOther)
 	regions := bc.NewRegions.RandPendingRegions(storeID, ranges, randomRegionMaxRetry)
-	region := bc.selectRegion(regions, opts...)
+	region := bc.selectRegion(regions, opts1...)
 	if region == nil {
 		regions = bc.NewRegions.RandLeaderRegions(storeID, ranges, randomRegionMaxRetry)
-		region = bc.selectRegion(regions, opts...)
+		region = bc.selectRegion(regions, opts2...)
 	}
 	if region == nil {
 		regions = bc.NewRegions.RandFollowerRegions(storeID, ranges, randomRegionMaxRetry)
-		region = bc.selectRegion(regions, opts...)
+		region = bc.selectRegion(regions, opts2...)
 	}
 	if region == nil {
 		regions = bc.NewRegions.RandLearnerRegions(storeID, ranges, randomRegionMaxRetry)
-		region = bc.selectRegion(regions, opts...)
+		region = bc.selectRegion(regions, opts2...)
 	}
 	bc.RUnlock()
 	return region
+}
+
+// RemoveNewRegion removes region from NewRegions.
+func (bc *BasicCluster) RemoveNewRegion(region *RegionInfo){
+	bc.NewRegions.RemoveRegion(region)
 }
 
 // RandFollowerRegion returns a random region that has a follower on the store.
@@ -393,7 +400,8 @@ func (bc *BasicCluster) GetOverlaps(region *RegionInfo) []*RegionInfo {
 // RegionSetInformer provides access to a shared informer of regions.
 type RegionSetInformer interface {
 	GetRegionCount() int
-	RandNewRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo
+	RandNewRegion(storeID uint64, ranges []KeyRange, optPending RegionOption, optOther RegionOption, opts ...RegionOption) *RegionInfo
+	RemoveNewRegion(region *RegionInfo)
 	RandFollowerRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo
 	RandLeaderRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo
 	RandLearnerRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo
