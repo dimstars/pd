@@ -25,22 +25,22 @@ import (
 )
 
 // SelectionStrategy is the strategy to select a region for scheduling.
-type  SelectionStrategy uint64
+type SelectionStrategy uint64
 
 const (
 	// Random means selecting a region randomly.
-	Random          SelectionStrategy = 0
+	Random SelectionStrategy = 0
 	// TimeAveraged means selecting a new region first. Make the probability of all regions being selected equal over a period of time.
-	TimeAveraged    SelectionStrategy = 1
+	TimeAveraged SelectionStrategy = 1
 	// SetPartitioned means selecting a region in NewRegions set first. Periodically remove old Regions from NewRegions.
-	SetPartitioned  SelectionStrategy = 2
+	SetPartitioned SelectionStrategy = 2
 )
 
 // BasicCluster provides basic data member and interface for a tikv cluster.
 type BasicCluster struct {
 	sync.RWMutex
-	Stores  *StoresInfo
-	Regions *RegionsInfo
+	Stores     *StoresInfo
+	Regions    *RegionsInfo
 	NewRegions *RegionsInfo
 	strategy   SelectionStrategy
 }
@@ -48,8 +48,8 @@ type BasicCluster struct {
 // NewBasicCluster creates a BasicCluster.
 func NewBasicCluster() *BasicCluster {
 	return &BasicCluster{
-		Stores:  NewStoresInfo(),
-		Regions: NewRegionsInfo(),
+		Stores:     NewStoresInfo(),
+		Regions:    NewRegionsInfo(),
 		NewRegions: NewRegionsInfo(),
 		strategy:   Random,
 	}
@@ -206,7 +206,7 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPend
 }
 
 // RemoveNewRegion removes region from NewRegions.
-func (bc *BasicCluster) RemoveNewRegion(region *RegionInfo){
+func (bc *BasicCluster) RemoveNewRegion(region *RegionInfo) {
 	bc.NewRegions.RemoveRegion(region)
 }
 
