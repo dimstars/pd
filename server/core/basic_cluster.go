@@ -24,12 +24,26 @@ import (
 	"go.uber.org/zap"
 )
 
+type  SelectionStrategy uint64
+
+const (
+	// Select a region randomly.
+	Random          SelectionStrategy = 0
+	// Select a new region first.
+	// Make the probability of all regions being selected equal over a period of time.
+	TimeAveraged    SelectionStrategy = 1
+	// Select a region in NewRegions set first.
+	// Periodically remove old Regions from NewRegions.
+	SetPartitioned  SelectionStrategy = 2
+)
+
 // BasicCluster provides basic data member and interface for a tikv cluster.
 type BasicCluster struct {
 	sync.RWMutex
 	Stores  *StoresInfo
 	Regions *RegionsInfo
 	NewRegions *RegionsInfo
+	strategy   SelectionStrategy
 }
 
 // NewBasicCluster creates a BasicCluster.
@@ -38,7 +52,13 @@ func NewBasicCluster() *BasicCluster {
 		Stores:  NewStoresInfo(),
 		Regions: NewRegionsInfo(),
 		NewRegions: NewRegionsInfo(),
+		strategy:   Random,
 	}
+}
+
+// SetStrategy sets the region selection strategy for balancing regions.
+func (bc *BasicCluster) SetStrategy(strategy SelectionStrategy) {
+	bc.strategy = strategy
 }
 
 // GetStores returns all Stores in the cluster.
@@ -162,25 +182,28 @@ const randomRegionMaxRetry = 10
 
 // RandNewRegion returns a random region in new region set.
 func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPending RegionOption, optOther RegionOption, opts ...RegionOption) *RegionInfo {
-	bc.RLock()
-	opts1 := append(opts, optPending)
-	opts2 := append(opts, optOther)
-	regions := bc.NewRegions.RandPendingRegions(storeID, ranges, randomRegionMaxRetry)
-	region := bc.selectRegion(regions, opts1...)
-	if region == nil {
-		regions = bc.NewRegions.RandLeaderRegions(storeID, ranges, randomRegionMaxRetry)
-		region = bc.selectRegion(regions, opts2...)
+	if bc.strategy == SetPartitioned {
+		bc.RLock()
+		opts1 := append(opts, optPending)
+		opts2 := append(opts, optOther)
+		regions := bc.NewRegions.RandPendingRegions(storeID, ranges, randomRegionMaxRetry)
+		region := bc.selectRegion(regions, opts1...)
+		if region == nil {
+			regions = bc.NewRegions.RandLeaderRegions(storeID, ranges, randomRegionMaxRetry)
+			region = bc.selectRegion(regions, opts2...)
+		}
+		if region == nil {
+			regions = bc.NewRegions.RandFollowerRegions(storeID, ranges, randomRegionMaxRetry)
+			region = bc.selectRegion(regions, opts2...)
+		}
+		if region == nil {
+			regions = bc.NewRegions.RandLearnerRegions(storeID, ranges, randomRegionMaxRetry)
+			region = bc.selectRegion(regions, opts2...)
+		}
+		bc.RUnlock()
+		return region
 	}
-	if region == nil {
-		regions = bc.NewRegions.RandFollowerRegions(storeID, ranges, randomRegionMaxRetry)
-		region = bc.selectRegion(regions, opts2...)
-	}
-	if region == nil {
-		regions = bc.NewRegions.RandLearnerRegions(storeID, ranges, randomRegionMaxRetry)
-		region = bc.selectRegion(regions, opts2...)
-	}
-	bc.RUnlock()
-	return region
+	return nil
 }
 
 // RemoveNewRegion removes region from NewRegions.

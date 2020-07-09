@@ -64,14 +64,6 @@ const (
 	BalanceRegionType = "balance-region"
 )
 
-type  selectionStrategy uint64
-
-const (
-	Random          selectionStrategy = 0
-	TimeAveraged    selectionStrategy = 1
-	SetPartitioned  selectionStrategy = 2
-)
-
 type balanceRegionSchedulerConfig struct {
 	Name   string          `json:"name"`
 	Ranges []core.KeyRange `json:"ranges"`
@@ -83,7 +75,6 @@ type balanceRegionScheduler struct {
 	opController *schedule.OperatorController
 	filters      []filter.Filter
 	counter      *prometheus.CounterVec
-	strategy     selectionStrategy
 }
 
 // newBalanceRegionScheduler creates a scheduler that tends to keep regions on
@@ -95,7 +86,6 @@ func newBalanceRegionScheduler(opController *schedule.OperatorController, conf *
 		conf:          conf,
 		opController:  opController,
 		counter:       balanceRegionCounter,
-		strategy:      Random,
 	}
 	for _, setOption := range opts {
 		setOption(scheduler)
@@ -122,11 +112,6 @@ func WithBalanceRegionName(name string) BalanceRegionCreateOption {
 	return func(s *balanceRegionScheduler) {
 		s.conf.Name = name
 	}
-}
-
-// SetStrategy sets the region selection strategy for balancing regions.
-func (s *balanceRegionScheduler) SetStrategy(strategy selectionStrategy) {
-	s.strategy = strategy
 }
 
 func (s *balanceRegionScheduler) GetName() string {
@@ -163,11 +148,8 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) []*operator.Opera
 		for i := 0; i < balanceRegionRetryLimit; i++ {
 			// Priority pick the new region.
 			var region *core.RegionInfo = nil
-			NewRegionAvailable := false
-			if s.strategy == SetPartitioned {
-				NewRegionAvailable = true
-				region = cluster.RandNewRegion(sourceID, s.conf.Ranges, opt.HealthAllowPending(cluster), opt.HealthRegion(cluster), opt.ReplicatedRegion(cluster))
-			}
+			NewRegionAvailable := true
+			region = cluster.RandNewRegion(sourceID, s.conf.Ranges, opt.HealthAllowPending(cluster), opt.HealthRegion(cluster), opt.ReplicatedRegion(cluster))
 			if region == nil {
 				NewRegionAvailable = false
 				// Then pick the region that has a pending peer in the source store.
