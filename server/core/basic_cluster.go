@@ -24,16 +24,15 @@ import (
 	"go.uber.org/zap"
 )
 
+// SelectionStrategy is the strategy to select a region for scheduling.
 type  SelectionStrategy uint64
 
 const (
-	// Select a region randomly.
+	// Random means selecting a region randomly.
 	Random          SelectionStrategy = 0
-	// Select a new region first.
-	// Make the probability of all regions being selected equal over a period of time.
+	// TimeAveraged means selecting a new region first. Make the probability of all regions being selected equal over a period of time.
 	TimeAveraged    SelectionStrategy = 1
-	// Select a region in NewRegions set first.
-	// Periodically remove old Regions from NewRegions.
+	// SetPartitioned means selecting a region in NewRegions set first. Periodically remove old Regions from NewRegions.
 	SetPartitioned  SelectionStrategy = 2
 )
 
