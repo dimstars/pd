@@ -1430,3 +1430,64 @@ func (s *testScatterRangeLeaderSuite) TestBalanceWhenRegionNotHeartbeat(c *C) {
 		schedule.ApplyOperator(tc, ops[0])
 	}
 }
+
+func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
+	opt := mockoption.NewScheduleOptions()
+	tc := mockcluster.NewCluster(opt)
+	tc.SetStrategy(core.SetPartitioned)
+	oc := schedule.NewOperatorController(s.ctx, nil, nil)
+	hb, err := schedule.CreateScheduler(BalanceRegionType, oc, core.NewStorage(kv.NewMemoryKV()), schedule.ConfigSliceDecoder(BalanceRegionType, []string{"", ""}))
+	c.Assert(err, IsNil)
+
+	// Add stores 1,2,3,4,5.
+	tc.AddRegionStore(1, 0)
+	tc.AddRegionStore(2, 0)
+	tc.AddRegionStore(3, 0)
+	tc.AddRegionStore(4, 0)
+	tc.AddRegionStore(5, 0)
+	var (
+		id      uint64
+		regions []*metapb.Region
+	)
+	for i := 0; i < 50; i++ {
+		peers := []*metapb.Peer{
+			{Id: id + 1, StoreId: 1},
+			{Id: id + 2, StoreId: 2},
+			{Id: id + 3, StoreId: 3},
+		}
+		regions = append(regions, &metapb.Region{
+			Id:       id + 4,
+			Peers:    peers,
+			StartKey: []byte(fmt.Sprintf("s_%02d", i)),
+			EndKey:   []byte(fmt.Sprintf("s_%02d", i+1)),
+		})
+		id += 4
+	}
+	// empty case
+	regions[49].EndKey = []byte("")
+	for _, meta := range regions {
+		leader := rand.Intn(4) % 3
+		regionInfo := core.NewRegionInfo(
+			meta,
+			meta.Peers[leader],
+			core.SetApproximateKeys(96),
+			core.SetApproximateSize(96),
+		)
+
+		tc.Regions.SetRegion(regionInfo)
+	}
+	for i := 1; i <= 5; i++ {
+		tc.UpdateStoreStatus(uint64(i))
+	}
+
+	// For each cycle, place a region into the NewRegions set (representing that it is new).
+	// Call the Schedule function and verify that this region is selected.
+	// This region is then removed from the NewRegions set before next cycle.
+	for i := 10; i < 20; i++ {
+		region := tc.Regions.GetRegion(uint64(i * 4 + 4))
+		c.Assert(region, NotNil)
+		tc.NewRegions.SetRegion(region)
+		c.Assert(hb.Schedule(tc)[0].RegionID(), Equals, uint64(i * 4 + 4))
+		tc.RemoveNewRegion(region)
+	}
+}
