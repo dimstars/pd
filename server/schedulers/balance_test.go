@@ -1480,14 +1480,33 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		tc.UpdateStoreStatus(uint64(i))
 	}
 
+	// Set the probability to 1.
+	// New regions are preferred.
+	tc.SetProbability(1.0)
 	// For each cycle, place a region into the NewRegions set (representing that it is new).
 	// Call the Schedule function and verify that this region is selected.
 	// This region is then removed from the NewRegions set before next cycle.
-	for i := 10; i < 20; i++ {
-		region := tc.Regions.GetRegion(uint64(i * 4 + 4))
+	for i := 10; i < 20; i += 2 {
+		region := tc.Regions.GetRegion(uint64(i*4 + 4))
 		c.Assert(region, NotNil)
 		tc.NewRegions.SetRegion(region)
-		c.Assert(hb.Schedule(tc)[0].RegionID(), Equals, uint64(i * 4 + 4))
+		c.Assert(hb.Schedule(tc)[0].RegionID(), Equals, uint64(i*4+4))
 		tc.RemoveNewRegion(region)
 	}
+	// Set the probability to 0.
+	// Regions have the same probability of being selected.
+	tc.SetProbability(0.0)
+	sum := 0
+	for i := 30; i < 50; i++ {
+		region := tc.Regions.GetRegion(uint64(i*4 + 4))
+		c.Assert(region, NotNil)
+		tc.NewRegions.SetRegion(region)
+		if hb.Schedule(tc)[0].RegionID() == uint64(i*4+4) {
+			sum ++
+		}
+		tc.RemoveNewRegion(region)
+	}
+	// The probability of failure of this assertion is 0.02^20.
+	// TODO: An absolutely accurate method is required to replace this assertion.
+	c.Assert(sum, Less, 10)
 }

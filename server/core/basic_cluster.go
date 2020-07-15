@@ -15,7 +15,9 @@ package core
 
 import (
 	"bytes"
+	"math/rand"
 	"sync"
+	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
@@ -30,19 +32,20 @@ type SelectionStrategy uint64
 const (
 	// Random means selecting a region randomly.
 	Random SelectionStrategy = 0
-	// TimeAveraged means selecting a new region first. Make the probability of all regions being selected equal over a period of time.
-	TimeAveraged SelectionStrategy = 1
 	// SetPartitioned means selecting a region in NewRegions set first. Periodically remove old Regions from NewRegions.
-	SetPartitioned SelectionStrategy = 2
+	SetPartitioned SelectionStrategy = 1
+	// TimeAveraged means selecting a new region first. Make the probability of all regions being selected equal over a period of time.
+	TimeAveraged SelectionStrategy = 2
 )
 
 // BasicCluster provides basic data member and interface for a tikv cluster.
 type BasicCluster struct {
 	sync.RWMutex
-	Stores     *StoresInfo
-	Regions    *RegionsInfo
-	NewRegions *RegionsInfo
-	strategy   SelectionStrategy
+	Stores      *StoresInfo
+	Regions     *RegionsInfo
+	NewRegions  *RegionsInfo
+	strategy    SelectionStrategy
+	probability float64
 }
 
 // NewBasicCluster creates a BasicCluster.
@@ -52,12 +55,18 @@ func NewBasicCluster() *BasicCluster {
 		Regions:    NewRegionsInfo(),
 		NewRegions: NewRegionsInfo(),
 		strategy:   Random,
+		probability:1.0,
 	}
 }
 
 // SetStrategy sets the region selection strategy for balancing regions.
 func (bc *BasicCluster) SetStrategy(strategy SelectionStrategy) {
 	bc.strategy = strategy
+}
+
+// SetStrategy sets the probability of new regions being selected.
+func (bc *BasicCluster) SetProbability(probability float64) {
+	bc.probability = probability
 }
 
 // GetStores returns all Stores in the cluster.
@@ -184,32 +193,40 @@ const randomRegionMaxRetry = 10
 // RandNewRegion returns a random region in new region set.
 func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPending RegionOption, optOther RegionOption, opts ...RegionOption) *RegionInfo {
 	if bc.strategy == SetPartitioned {
-		bc.RLock()
-		opts1 := append(opts, optPending)
-		opts2 := append(opts, optOther)
-		regions := bc.NewRegions.RandPendingRegions(storeID, ranges, randomRegionMaxRetry)
-		region := bc.selectRegion(regions, opts1...)
-		if region == nil {
-			regions = bc.NewRegions.RandLeaderRegions(storeID, ranges, randomRegionMaxRetry)
-			region = bc.selectRegion(regions, opts2...)
+		rand.Seed(time.Now().UnixNano())
+		p := float64(rand.Intn(100) + 1) / 100.0
+		if p <= bc.probability {
+			bc.RLock()
+			opts1 := append(opts, optPending)
+			opts2 := append(opts, optOther)
+			regions := bc.NewRegions.RandPendingRegions(storeID, ranges, randomRegionMaxRetry)
+			region := bc.selectRegion(regions, opts1...)
+			if region == nil {
+				regions = bc.NewRegions.RandLeaderRegions(storeID, ranges, randomRegionMaxRetry)
+				region = bc.selectRegion(regions, opts2...)
+			}
+			if region == nil {
+				regions = bc.NewRegions.RandFollowerRegions(storeID, ranges, randomRegionMaxRetry)
+				region = bc.selectRegion(regions, opts2...)
+			}
+			if region == nil {
+				regions = bc.NewRegions.RandLearnerRegions(storeID, ranges, randomRegionMaxRetry)
+				region = bc.selectRegion(regions, opts2...)
+			}
+			bc.RUnlock()
+			return region
 		}
-		if region == nil {
-			regions = bc.NewRegions.RandFollowerRegions(storeID, ranges, randomRegionMaxRetry)
-			region = bc.selectRegion(regions, opts2...)
-		}
-		if region == nil {
-			regions = bc.NewRegions.RandLearnerRegions(storeID, ranges, randomRegionMaxRetry)
-			region = bc.selectRegion(regions, opts2...)
-		}
-		bc.RUnlock()
-		return region
+	}else if bc.strategy == TimeAveraged {
+		// TODO
 	}
 	return nil
 }
 
 // RemoveNewRegion removes region from NewRegions.
 func (bc *BasicCluster) RemoveNewRegion(region *RegionInfo) {
-	bc.NewRegions.RemoveRegion(region)
+	if bc.strategy == SetPartitioned {
+		bc.NewRegions.RemoveRegion(region)
+	}
 }
 
 // RandFollowerRegion returns a random region that has a follower on the store.
@@ -369,7 +386,9 @@ func (bc *BasicCluster) PreCheckPutRegion(region *RegionInfo) (*RegionInfo, erro
 func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	bc.Lock()
 	defer bc.Unlock()
-	bc.NewRegions.SetRegion(region)
+	if bc.strategy == SetPartitioned {
+		bc.NewRegions.SetRegion(region)
+	}
 	return bc.Regions.SetRegion(region)
 }
 
