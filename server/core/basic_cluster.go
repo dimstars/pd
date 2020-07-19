@@ -26,26 +26,20 @@ import (
 	"go.uber.org/zap"
 )
 
-// SelectionStrategy is the strategy to select a region for scheduling.
-type SelectionStrategy uint64
-
-const (
-	// Random means selecting a region randomly.
-	Random SelectionStrategy = 0
-	// SetPartitioned means selecting a region in NewRegions set first. Periodically remove old Regions from NewRegions.
-	SetPartitioned SelectionStrategy = 1
-	// TimeAveraged means selecting a new region first. Make the probability of all regions being selected equal over a period of time.
-	TimeAveraged SelectionStrategy = 2
-)
+type SelectConfig struct {
+	NewRegionFirst    bool
+	// Unit: second
+	TimeThreshold     uint64
+	SelectProbability float64
+}
 
 // BasicCluster provides basic data member and interface for a tikv cluster.
 type BasicCluster struct {
 	sync.RWMutex
-	Stores      *StoresInfo
-	Regions     *RegionsInfo
-	NewRegions  *RegionsInfo
-	strategy    SelectionStrategy
-	probability float64
+	Stores     *StoresInfo
+	Regions    *RegionsInfo
+	NewRegions *RegionsInfo
+	SelectConf *SelectConfig
 }
 
 // NewBasicCluster creates a BasicCluster.
@@ -54,19 +48,22 @@ func NewBasicCluster() *BasicCluster {
 		Stores:     NewStoresInfo(),
 		Regions:    NewRegionsInfo(),
 		NewRegions: NewRegionsInfo(),
-		strategy:   Random,
-		probability:1.0,
+		SelectConf: NewSelectConfig(),
 	}
 }
 
-// SetStrategy sets the region selection strategy for balancing regions.
-func (bc *BasicCluster) SetStrategy(strategy SelectionStrategy) {
-	bc.strategy = strategy
+// NewSelectConfig creates a SelectConfig.
+func NewSelectConfig() *SelectConfig{
+	return &SelectConfig{
+		NewRegionFirst:    true,
+		TimeThreshold:     60*60*60,
+		SelectProbability: 0.5,
+	}
 }
 
-// SetStrategy sets the probability of new regions being selected.
-func (bc *BasicCluster) SetProbability(probability float64) {
-	bc.probability = probability
+// SetSelectConfig sets the SelectConfig for selecting regions.
+func (bc *BasicCluster) SetSelectConfig(SelectConf *SelectConfig) {
+	bc.SelectConf = SelectConf
 }
 
 // GetStores returns all Stores in the cluster.
@@ -192,10 +189,10 @@ const randomRegionMaxRetry = 10
 
 // RandNewRegion returns a random region in new region set.
 func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPending RegionOption, optOther RegionOption, opts ...RegionOption) *RegionInfo {
-	if bc.strategy == SetPartitioned {
+	if bc.SelectConf.NewRegionFirst {
 		rand.Seed(time.Now().UnixNano())
-		p := float64(rand.Intn(100) + 1) / 100.0
-		if p <= bc.probability {
+		p := float64(rand.Intn(100)+1) / 100.0
+		if p <= bc.SelectConf.SelectProbability {
 			bc.RLock()
 			opts1 := append(opts, optPending)
 			opts2 := append(opts, optOther)
@@ -216,15 +213,13 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPend
 			bc.RUnlock()
 			return region
 		}
-	}else if bc.strategy == TimeAveraged {
-		// TODO
 	}
 	return nil
 }
 
 // RemoveNewRegion removes region from NewRegions.
 func (bc *BasicCluster) RemoveNewRegion(region *RegionInfo) {
-	if bc.strategy == SetPartitioned {
+	if bc.SelectConf.NewRegionFirst {
 		bc.NewRegions.RemoveRegion(region)
 	}
 }
@@ -386,7 +381,7 @@ func (bc *BasicCluster) PreCheckPutRegion(region *RegionInfo) (*RegionInfo, erro
 func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	bc.Lock()
 	defer bc.Unlock()
-	if bc.strategy == SetPartitioned {
+	if bc.SelectConf.NewRegionFirst {
 		bc.NewRegions.SetRegion(region)
 	}
 	return bc.Regions.SetRegion(region)

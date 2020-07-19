@@ -1434,7 +1434,6 @@ func (s *testScatterRangeLeaderSuite) TestBalanceWhenRegionNotHeartbeat(c *C) {
 func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	opt := mockoption.NewScheduleOptions()
 	tc := mockcluster.NewCluster(opt)
-	tc.SetStrategy(core.SetPartitioned)
 	oc := schedule.NewOperatorController(s.ctx, nil, nil)
 	hb, err := schedule.CreateScheduler(BalanceRegionType, oc, core.NewStorage(kv.NewMemoryKV()), schedule.ConfigSliceDecoder(BalanceRegionType, []string{"", ""}))
 	c.Assert(err, IsNil)
@@ -1482,7 +1481,12 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 
 	// Set the probability to 1.
 	// New regions are preferred.
-	tc.SetProbability(1.0)
+	tc.SetSelectConfig(
+		&core.SelectConfig{
+			NewRegionFirst:    true,
+			TimeThreshold:     60*60*60,
+			SelectProbability: 1.0,
+		})
 	// For each cycle, place a region into the NewRegions set (representing that it is new).
 	// Call the Schedule function and verify that this region is selected.
 	// This region is then removed from the NewRegions set before next cycle.
@@ -1495,18 +1499,23 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	}
 	// Set the probability to 0.
 	// Regions have the same probability of being selected.
-	tc.SetProbability(0.0)
+	tc.SetSelectConfig(
+		&core.SelectConfig{
+			NewRegionFirst:    true,
+			TimeThreshold:     60*60*60,
+			SelectProbability: 0.0,
+		})
 	sum := 0
 	for i := 30; i < 50; i++ {
 		region := tc.Regions.GetRegion(uint64(i*4 + 4))
 		c.Assert(region, NotNil)
 		tc.NewRegions.SetRegion(region)
 		if hb.Schedule(tc)[0].RegionID() == uint64(i*4+4) {
-			sum ++
+			sum++
 		}
 		tc.RemoveNewRegion(region)
 	}
 	// The probability of failure of this assertion is 0.02^20.
 	// TODO: An absolutely accurate method is required to replace this assertion.
-	c.Assert(sum, Less, 10)
+	c.Assert(sum, Less, 20)
 }
