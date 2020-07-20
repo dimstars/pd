@@ -403,7 +403,9 @@ func (bc *BasicCluster) CheckAndPutRegion(region *RegionInfo) []*RegionInfo {
 func (bc *BasicCluster) RemoveRegion(region *RegionInfo) {
 	bc.Lock()
 	defer bc.Unlock()
-	bc.NewRegions.RemoveRegion(region)
+	if bc.SelectConf.NewRegionFirst {
+		bc.NewRegions.RemoveRegion(region)
+	}
 	bc.Regions.RemoveRegion(region)
 }
 
