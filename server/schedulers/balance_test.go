@@ -1534,7 +1534,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 			SelectProbability: 1.0,
 		})
 	// Add multiple regions to NewRegions for more sophisticated probabilistic testing.
-	var counts [4] int
+	var counts [4]int
 	tests := []uint64{0, 3, 15, 49}
 	for i, index := range tests {
 		region := tc.Regions.GetRegion(uint64(index*4 + 4))
@@ -1552,7 +1552,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		}
 	}
 	// The region with less survival time is more likely to be selected.
-	for i := 0; i < len(tests) - 1; i++ {
+	for i := 0; i < len(tests)-1; i++ {
 		c.Assert(counts[i], Less, counts[i+1])
 	}
 }

@@ -255,6 +255,7 @@ func (t *regionTree) RandomNewRegions(n int, ranges []KeyRange, timeThreshold ui
 		ranges = []KeyRange{NewKeyRange("", "")}
 	}
 
+	now := uint64(time.Now().Unix())
 	var allRegions []*RegionInfo
 	// Find out all the regions within ranges.
 	for i := 0; i < len(ranges); i++ {
@@ -284,7 +285,9 @@ func (t *regionTree) RandomNewRegions(n int, ranges []KeyRange, timeThreshold ui
 		}
 		for index := startIndex; index < endIndex; index++ {
 			region := t.tree.GetAt(index).(*regionItem).region
-			if isInvolved(region, startKey, endKey) {
+			if region.GetInterval().StartTimestamp < now - timeThreshold{
+				t.remove(region)
+			} else if isInvolved(region, startKey, endKey) {
 				allRegions = append(allRegions, region)
 			}
 		}
@@ -303,7 +306,7 @@ func SelectNewRegions(n int, allRegions []*RegionInfo, timeThreshold uint64) []*
 	p := make([]float64, 0, len(allRegions))
 	sum := float64(0)
 	mint := uint64(time.Now().Unix())
-	if mint > timeThreshold{
+	if mint > timeThreshold {
 		mint -= timeThreshold
 	} else {
 		mint = 0
@@ -311,26 +314,23 @@ func SelectNewRegions(n int, allRegions []*RegionInfo, timeThreshold uint64) []*
 
 	for i, region := range allRegions {
 		t = append(t, region.GetInterval().GetStartTimestamp())
-		if t[i] < mint  {
+		if t[i] < mint {
 			t[i] = 0
 		} else {
 			t[i] = t[i] - mint + 1
 		}
 		w = append(w, math.Pow(float64(t[i]), 2))
 		sum += w[i]
-		//println(i, ":", t[i])
 	}
 	for i := 0; i < n && i < len(allRegions); i++ {
-		p = append(p, w[i] / sum)
-		//println(p[i])
+		p = append(p, w[i]/sum)
 	}
 
 	for i := 0; i < n && i < len(allRegions); i++ {
 		random := float64(rand.Uint64()) / float64(math.MaxUint64)
 		temp := float64(0.0)
-		//println(i, ":", random)
 		for j, region := range allRegions {
-			if temp <= random && random < temp + p[j] || j == len(allRegions) - 1{
+			if temp <= random && random < temp+p[j] || j == len(allRegions)-1 {
 				regions = append(regions, region)
 				break
 			}

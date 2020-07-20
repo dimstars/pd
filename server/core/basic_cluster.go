@@ -54,7 +54,7 @@ func NewBasicCluster() *BasicCluster {
 }
 
 // NewSelectConfig creates a SelectConfig.
-func NewSelectConfig() *SelectConfig{
+func NewSelectConfig() *SelectConfig {
 	return &SelectConfig{
 		NewRegionFirst:    false,
 		TimeThreshold:     60 * 60 * 60,
