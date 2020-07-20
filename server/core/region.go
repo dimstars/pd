@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
@@ -50,8 +51,9 @@ type RegionInfo struct {
 // NewRegionInfo creates RegionInfo with region's meta and leader peer.
 func NewRegionInfo(region *metapb.Region, leader *metapb.Peer, opts ...RegionCreateOption) *RegionInfo {
 	regionInfo := &RegionInfo{
-		meta:   region,
-		leader: leader,
+		meta:     region,
+		leader:   leader,
+		interval: &pdpb.TimeInterval{StartTimestamp: uint64(time.Now().Unix()), EndTimestamp: 0},
 	}
 
 	for _, opt := range opts {
