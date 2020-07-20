@@ -285,7 +285,7 @@ func (t *regionTree) RandomNewRegions(n int, ranges []KeyRange, timeThreshold ui
 		}
 		for index := startIndex; index < endIndex; index++ {
 			region := t.tree.GetAt(index).(*regionItem).region
-			if region.GetInterval().StartTimestamp < now-timeThreshold{
+			if region.GetInterval().StartTimestamp < now-timeThreshold {
 				t.remove(region)
 			} else if isInvolved(region, startKey, endKey) {
 				allRegions = append(allRegions, region)
