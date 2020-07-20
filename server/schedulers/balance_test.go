@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"time"
 
 	. "github.com/pingcap/check"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -1464,13 +1465,17 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	}
 	// empty case
 	regions[49].EndKey = []byte("")
-	for _, meta := range regions {
+	now := uint64(time.Now().Unix())
+	for i, meta := range regions {
 		leader := rand.Intn(4) % 3
 		regionInfo := core.NewRegionInfo(
 			meta,
 			meta.Peers[leader],
 			core.SetApproximateKeys(96),
 			core.SetApproximateSize(96),
+			core.SetInterval(&pdpb.TimeInterval{StartTimestamp: now - uint64((49-i)*4320), EndTimestamp: 0}),
+			// WithPendingPeers ensures that all regions have pengdingPeers.
+			core.WithPendingPeers(meta.Peers),
 		)
 
 		tc.Regions.SetRegion(regionInfo)
@@ -1484,25 +1489,27 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	tc.SetSelectConfig(
 		&core.SelectConfig{
 			NewRegionFirst:    true,
-			TimeThreshold:     60*60*60,
+			TimeThreshold:     60 * 60 * 60,
 			SelectProbability: 1.0,
 		})
 	// For each cycle, place a region into the NewRegions set (representing that it is new).
 	// Call the Schedule function and verify that this region is selected.
 	// This region is then removed from the NewRegions set before next cycle.
-	for i := 10; i < 20; i += 2 {
+	for i := 10; i < 30; i += 2 {
 		region := tc.Regions.GetRegion(uint64(i*4 + 4))
 		c.Assert(region, NotNil)
 		tc.NewRegions.SetRegion(region)
 		c.Assert(hb.Schedule(tc)[0].RegionID(), Equals, uint64(i*4+4))
 		tc.RemoveNewRegion(region)
 	}
+
 	// Set the probability to 0.
+	// NewRegions won't be used.
 	// Regions have the same probability of being selected.
 	tc.SetSelectConfig(
 		&core.SelectConfig{
 			NewRegionFirst:    true,
-			TimeThreshold:     60*60*60,
+			TimeThreshold:     60 * 60 * 60,
 			SelectProbability: 0.0,
 		})
 	sum := 0
@@ -1518,4 +1525,34 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	// The probability of failure of this assertion is 0.02^20.
 	// TODO: An absolutely accurate method is required to replace this assertion.
 	c.Assert(sum, Less, 20)
+
+	// Set the probability to 1.
+	tc.SetSelectConfig(
+		&core.SelectConfig{
+			NewRegionFirst:    true,
+			TimeThreshold:     60 * 60 * 60,
+			SelectProbability: 1.0,
+		})
+	// Add multiple regions to NewRegions for more sophisticated probabilistic testing.
+	var counts [4] int
+	tests := []uint64{0, 3, 15, 49}
+	for i, index := range tests {
+		region := tc.Regions.GetRegion(uint64(index*4 + 4))
+		c.Assert(region, NotNil)
+		tc.NewRegions.SetRegion(region)
+		counts[i] = 0
+	}
+	for i := 0; i < 10000; i++ {
+		ops := hb.Schedule(tc)
+		index := (ops[0].RegionID() - 4) / 4
+		for j, index2 := range tests {
+			if index == index2 {
+				counts[j]++
+			}
+		}
+	}
+	// The region with less survival time is more likely to be selected.
+	for i := 0; i < len(tests) - 1; i++ {
+		c.Assert(counts[i], Less, counts[i+1])
+	}
 }

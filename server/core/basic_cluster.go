@@ -26,8 +26,9 @@ import (
 	"go.uber.org/zap"
 )
 
+// SelectConfig provides parameters for selecting regions.
 type SelectConfig struct {
-	NewRegionFirst    bool
+	NewRegionFirst bool
 	// Unit: second
 	TimeThreshold     uint64
 	SelectProbability float64
@@ -55,8 +56,8 @@ func NewBasicCluster() *BasicCluster {
 // NewSelectConfig creates a SelectConfig.
 func NewSelectConfig() *SelectConfig{
 	return &SelectConfig{
-		NewRegionFirst:    true,
-		TimeThreshold:     60*60*60,
+		NewRegionFirst:    false,
+		TimeThreshold:     60 * 60 * 60,
 		SelectProbability: 0.5,
 	}
 }
@@ -196,18 +197,18 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPend
 			bc.RLock()
 			opts1 := append(opts, optPending)
 			opts2 := append(opts, optOther)
-			regions := bc.NewRegions.RandPendingRegions(storeID, ranges, randomRegionMaxRetry)
+			regions := bc.NewRegions.pendingPeers[storeID].RandomNewRegions(randomRegionMaxRetry, ranges, bc.SelectConf.TimeThreshold)
 			region := bc.selectRegion(regions, opts1...)
 			if region == nil {
-				regions = bc.NewRegions.RandLeaderRegions(storeID, ranges, randomRegionMaxRetry)
+				regions := bc.NewRegions.leaders[storeID].RandomNewRegions(randomRegionMaxRetry, ranges, bc.SelectConf.TimeThreshold)
 				region = bc.selectRegion(regions, opts2...)
 			}
 			if region == nil {
-				regions = bc.NewRegions.RandFollowerRegions(storeID, ranges, randomRegionMaxRetry)
+				regions := bc.NewRegions.followers[storeID].RandomNewRegions(randomRegionMaxRetry, ranges, bc.SelectConf.TimeThreshold)
 				region = bc.selectRegion(regions, opts2...)
 			}
 			if region == nil {
-				regions = bc.NewRegions.RandLearnerRegions(storeID, ranges, randomRegionMaxRetry)
+				regions := bc.NewRegions.learners[storeID].RandomNewRegions(randomRegionMaxRetry, ranges, bc.SelectConf.TimeThreshold)
 				region = bc.selectRegion(regions, opts2...)
 			}
 			bc.RUnlock()

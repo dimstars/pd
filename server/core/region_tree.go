@@ -14,6 +14,7 @@ package core
 
 import (
 	"bytes"
+	"math"
 	"math/rand"
 	"time"
 
@@ -241,6 +242,102 @@ func (t *regionTree) RandomRegion(ranges []KeyRange) *RegionInfo {
 	}
 
 	return nil
+}
+
+// RandomNewRegions is used to get n new regions within ranges.
+// Regions are selected with different probabilities according to TTL.
+func (t *regionTree) RandomNewRegions(n int, ranges []KeyRange, timeThreshold uint64) []*RegionInfo {
+	if t.length() == 0 {
+		return nil
+	}
+
+	if len(ranges) == 0 {
+		ranges = []KeyRange{NewKeyRange("", "")}
+	}
+
+	var allRegions []*RegionInfo
+	// Find out all the regions within ranges.
+	for i := 0; i < len(ranges); i++ {
+		var endIndex int
+		startKey, endKey := ranges[i].StartKey, ranges[i].EndKey
+		startRegion, startIndex := t.tree.GetWithIndex(&regionItem{region: &RegionInfo{meta: &metapb.Region{StartKey: startKey}}})
+
+		if len(endKey) != 0 {
+			_, endIndex = t.tree.GetWithIndex(&regionItem{region: &RegionInfo{meta: &metapb.Region{StartKey: endKey}}})
+		} else {
+			endIndex = t.tree.Len()
+		}
+
+		// Consider that the item in the tree may not be continuous,
+		// we need to check if the previous item contains the key.
+		if startIndex != 0 && startRegion == nil && t.tree.GetAt(startIndex-1).(*regionItem).Contains(startKey) {
+			startIndex--
+		}
+
+		if endIndex <= startIndex {
+			if len(endKey) > 0 && bytes.Compare(startKey, endKey) > 0 {
+				log.Error("wrong range keys",
+					zap.String("start-key", string(HexRegionKey(startKey))),
+					zap.String("end-key", string(HexRegionKey(endKey))))
+			}
+			continue
+		}
+		for index := startIndex; index < endIndex; index++ {
+			region := t.tree.GetAt(index).(*regionItem).region
+			if isInvolved(region, startKey, endKey) {
+				allRegions = append(allRegions, region)
+			}
+		}
+	}
+
+	regions := SelectNewRegions(n, allRegions, timeThreshold)
+
+	return regions
+}
+
+// SelectNewRegions is used to get n new regions with different probabilities.
+func SelectNewRegions(n int, allRegions []*RegionInfo, timeThreshold uint64) []*RegionInfo {
+	var regions []*RegionInfo
+	t := make([]uint64, 0, len(allRegions))
+	w := make([]float64, 0, len(allRegions))
+	p := make([]float64, 0, len(allRegions))
+	sum := float64(0)
+	mint := uint64(time.Now().Unix())
+	if mint > timeThreshold{
+		mint -= timeThreshold
+	} else {
+		mint = 0
+	}
+
+	for i, region := range allRegions {
+		t = append(t, region.GetInterval().GetStartTimestamp())
+		if t[i] < mint  {
+			t[i] = 0
+		} else {
+			t[i] = t[i] - mint + 1
+		}
+		w = append(w, math.Pow(float64(t[i]), 2))
+		sum += w[i]
+		//println(i, ":", t[i])
+	}
+	for i := 0; i < n && i < len(allRegions); i++ {
+		p = append(p, w[i] / sum)
+		//println(p[i])
+	}
+
+	for i := 0; i < n && i < len(allRegions); i++ {
+		random := float64(rand.Uint64()) / float64(math.MaxUint64)
+		temp := float64(0.0)
+		//println(i, ":", random)
+		for j, region := range allRegions {
+			if temp <= random && random < temp + p[j] || j == len(allRegions) - 1{
+				regions = append(regions, region)
+				break
+			}
+			temp += p[j]
+		}
+	}
+	return regions
 }
 
 func init() {

@@ -546,6 +546,17 @@ func (rst *regionSubTree) RandomRegions(n int, ranges []KeyRange) []*RegionInfo 
 	return regions
 }
 
+func (rst *regionSubTree) RandomNewRegions(n int, ranges []KeyRange, timeThreshold uint64) []*RegionInfo {
+	if rst.length() == 0 {
+		return nil
+	}
+
+	var regions []*RegionInfo
+
+	regions = rst.regionTree.RandomNewRegions(n, ranges, timeThreshold)
+	return regions
+}
+
 // RegionsInfo for export
 type RegionsInfo struct {
 	tree         *regionTree
