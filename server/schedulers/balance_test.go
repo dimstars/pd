@@ -1523,7 +1523,6 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		tc.RemoveNewRegion(region)
 	}
 	// The probability of failure of this assertion is 0.02^20.
-	// TODO: An absolutely accurate method is required to replace this assertion.
 	c.Assert(sum, Less, 20)
 
 	// Set the probability to 1.
