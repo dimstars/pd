@@ -57,7 +57,7 @@ func NewBasicCluster() *BasicCluster {
 func NewSelectConfig() *SelectConfig {
 	return &SelectConfig{
 		NewRegionFirst:    false,
-		TimeThreshold:     60 * 60 * 60,
+		TimeThreshold:     60 * 60,
 		SelectProbability: 0.5,
 	}
 }
@@ -382,7 +382,7 @@ func (bc *BasicCluster) PreCheckPutRegion(region *RegionInfo) (*RegionInfo, erro
 func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	bc.Lock()
 	defer bc.Unlock()
-	if bc.SelectConf.NewRegionFirst && region.interval.StartTimestamp >= uint64(time.Now().Unix()) - bc.SelectConf.TimeThreshold{
+	if bc.SelectConf.NewRegionFirst && region.GetInterval().GetStartTimestamp() >= uint64(time.Now().Unix())-bc.SelectConf.TimeThreshold {
 		bc.NewRegions.SetRegion(region)
 	}
 	return bc.Regions.SetRegion(region)
