@@ -196,10 +196,10 @@ func SetReportInterval(v uint64) RegionCreateOption {
 	}
 }
 
-// SetInterval sets the interval for the region.
-func SetInterval(interval *pdpb.TimeInterval) RegionCreateOption {
+// SetTimestamp sets the timestamp for the region.
+func SetTimestamp(timestamp uint64) RegionCreateOption {
 	return func(region *RegionInfo) {
-		region.interval = interval
+		region.timestamp = timestamp
 	}
 }
 

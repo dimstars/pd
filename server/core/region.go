@@ -46,14 +46,15 @@ type RegionInfo struct {
 	approximateKeys   int64
 	interval          *pdpb.TimeInterval
 	replicationStatus *replication_modepb.RegionReplicationStatus
+	timestamp         uint64
 }
 
 // NewRegionInfo creates RegionInfo with region's meta and leader peer.
 func NewRegionInfo(region *metapb.Region, leader *metapb.Peer, opts ...RegionCreateOption) *RegionInfo {
 	regionInfo := &RegionInfo{
-		meta:     region,
-		leader:   leader,
-		interval: &pdpb.TimeInterval{StartTimestamp: uint64(time.Now().Unix()), EndTimestamp: 0},
+		meta:      region,
+		leader:    leader,
+		timestamp: uint64(time.Now().Unix()),
 	}
 
 	for _, opt := range opts {
@@ -405,6 +406,11 @@ func (r *RegionInfo) GetReplicationStatus() *replication_modepb.RegionReplicatio
 	return r.replicationStatus
 }
 
+// GetTimestamp returns the timestamp of the region.
+func (r *RegionInfo) GetTimestamp() uint64 {
+	return r.timestamp
+}
+
 // regionMap wraps a map[uint64]*core.RegionInfo and supports randomly pick a region.
 type regionMap struct {
 	m         map[uint64]*RegionInfo
@@ -553,9 +559,7 @@ func (rst *regionSubTree) RandomNewRegions(n int, ranges []KeyRange, timeThresho
 		return nil
 	}
 
-	var regions []*RegionInfo
-
-	regions = rst.regionTree.RandomNewRegions(n, ranges, timeThreshold)
+	regions := rst.regionTree.RandomNewRegions(n, ranges, timeThreshold)
 	return regions
 }
 

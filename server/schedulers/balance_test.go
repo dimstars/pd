@@ -1473,7 +1473,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 			meta.Peers[leader],
 			core.SetApproximateKeys(96),
 			core.SetApproximateSize(96),
-			core.SetInterval(&pdpb.TimeInterval{StartTimestamp: now - uint64((49-i)*4320), EndTimestamp: 0}),
+			core.SetTimestamp(now - uint64((49-i)*72)),
 			// WithPendingPeers ensures that all regions have pengdingPeers.
 			core.WithPendingPeers(meta.Peers),
 		)
@@ -1489,7 +1489,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	tc.SetSelectConfig(
 		&core.SelectConfig{
 			NewRegionFirst:    true,
-			TimeThreshold:     60 * 60 * 60,
+			TimeThreshold:     60 * 60,
 			SelectProbability: 1.0,
 		})
 	// For each cycle, place a region into the NewRegions set (representing that it is new).
@@ -1509,7 +1509,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	tc.SetSelectConfig(
 		&core.SelectConfig{
 			NewRegionFirst:    true,
-			TimeThreshold:     60 * 60 * 60,
+			TimeThreshold:     60 * 60,
 			SelectProbability: 0.0,
 		})
 	sum := 0
@@ -1529,7 +1529,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	tc.SetSelectConfig(
 		&core.SelectConfig{
 			NewRegionFirst:    true,
-			TimeThreshold:     60 * 60 * 60,
+			TimeThreshold:     60 * 60,
 			SelectProbability: 1.0,
 		})
 	// Add multiple regions to NewRegions for more sophisticated probabilistic testing.
