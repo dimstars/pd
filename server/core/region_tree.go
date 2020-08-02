@@ -245,7 +245,7 @@ func (t *regionTree) RandomRegion(ranges []KeyRange) *RegionInfo {
 }
 
 // RandomNewRegions is used to get n new regions within ranges.
-// Regions are selected with different probabilities according to TTL.
+// Regions are selected with different probabilities.
 func (t *regionTree) RandomNewRegions(n int, ranges []KeyRange, timeThreshold uint64) []*RegionInfo {
 	if t.length() == 0 {
 		return nil
@@ -255,7 +255,6 @@ func (t *regionTree) RandomNewRegions(n int, ranges []KeyRange, timeThreshold ui
 		ranges = []KeyRange{NewKeyRange("", "")}
 	}
 
-	now := uint64(time.Now().Unix())
 	var allRegions []*RegionInfo
 	// Find out all the regions within ranges.
 	for i := 0; i < len(ranges); i++ {
@@ -285,56 +284,34 @@ func (t *regionTree) RandomNewRegions(n int, ranges []KeyRange, timeThreshold ui
 		}
 		for index := startIndex; index < endIndex; index++ {
 			region := t.tree.GetAt(index).(*regionItem).region
-			if region.GetTimestamp() < now-timeThreshold {
-				t.remove(region)
-			} else if isInvolved(region, startKey, endKey) {
+			if isInvolved(region, startKey, endKey) {
 				allRegions = append(allRegions, region)
 			}
 		}
 	}
 
-	regions := SelectNewRegions(n, allRegions, timeThreshold)
-
+	regions := SelectNewRegions(n, allRegions)
 	return regions
 }
 
 // SelectNewRegions is used to get n new regions with different probabilities.
-func SelectNewRegions(n int, allRegions []*RegionInfo, timeThreshold uint64) []*RegionInfo {
+func SelectNewRegions(n int, allRegions []*RegionInfo) []*RegionInfo {
+	sum := 0.0
+	temp := 0.0
 	var regions []*RegionInfo
-	t := make([]uint64, 0, len(allRegions))
-	w := make([]float64, 0, len(allRegions))
-	p := make([]float64, 0, len(allRegions))
-	sum := float64(0)
-	mint := uint64(time.Now().Unix())
-	if mint > timeThreshold {
-		mint -= timeThreshold
-	} else {
-		mint = 0
+	for _, region := range allRegions {
+		sum += region.GetWeight()
 	}
-
-	for i, region := range allRegions {
-		t = append(t, region.GetTimestamp())
-		if t[i] < mint {
-			t[i] = 0
-		} else {
-			t[i] = t[i] - mint + 1
-		}
-		w = append(w, math.Pow(float64(t[i]), 2))
-		sum += w[i]
-	}
-	for i := 0; i < n && i < len(allRegions); i++ {
-		p = append(p, w[i]/sum)
-	}
-
 	for i := 0; i < n && i < len(allRegions); i++ {
 		random := float64(rand.Uint64()) / float64(math.MaxUint64)
-		temp := float64(0.0)
+		random *= sum
+		temp = 0.0
 		for j, region := range allRegions {
-			if temp <= random && random < temp+p[j] || j == len(allRegions)-1 {
+			if temp <= random && random < temp+region.GetWeight() || j == len(allRegions)-1 {
 				regions = append(regions, region)
 				break
 			}
-			temp += p[j]
+			temp += region.GetWeight()
 		}
 	}
 	return regions

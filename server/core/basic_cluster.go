@@ -15,6 +15,7 @@ package core
 
 import (
 	"bytes"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -63,8 +64,8 @@ func NewSelectConfig() *SelectConfig {
 }
 
 // SetSelectConfig sets the SelectConfig for selecting regions.
-func (bc *BasicCluster) SetSelectConfig(SelectConf *SelectConfig) {
-	bc.SelectConf = SelectConf
+func (bc *BasicCluster) SetSelectConfig(selectConf *SelectConfig) {
+	bc.SelectConf = selectConf
 }
 
 // GetStores returns all Stores in the cluster.
@@ -222,6 +223,16 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPend
 func (bc *BasicCluster) RemoveNewRegion(region *RegionInfo) {
 	if bc.SelectConf.NewRegionFirst {
 		bc.NewRegions.RemoveRegion(region)
+	}
+}
+
+// RemoveOldRegion removes outdated region from NewRegions.
+func (bc *BasicCluster) RemoveOldRegion() {
+	now := uint64(time.Now().Unix())
+	for _, region := range bc.NewRegions.GetRegions() {
+		if  region.GetTimestamp() < now-bc.SelectConf.TimeThreshold {
+			bc.NewRegions.RemoveRegion(region)
+		}
 	}
 }
 
@@ -384,8 +395,39 @@ func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	defer bc.Unlock()
 	if bc.SelectConf.NewRegionFirst && region.GetTimestamp() >= uint64(time.Now().Unix())-bc.SelectConf.TimeThreshold {
 		bc.NewRegions.SetRegion(region)
+		bc.RemoveOldRegion()
+		bc.CalculateWeights()
 	}
 	return bc.Regions.SetRegion(region)
+}
+
+// CalculateWeights calculates weights of all regions.
+func (bc *BasicCluster) CalculateWeights() {
+	now := uint64(time.Now().Unix())
+	var tempt uint64
+	allRegions :=bc.NewRegions.GetRegions()
+	w := make([]float64, 0, len(allRegions))
+	sum := 0.0
+	mint := now
+	if mint > bc.SelectConf.TimeThreshold {
+		mint -= bc.SelectConf.TimeThreshold
+	} else {
+		mint = 0
+	}
+
+	for i, region := range allRegions {
+		tempt = region.GetTimestamp()
+		if tempt >= mint {
+			tempt = tempt - mint + 1
+		} else {
+			tempt = 0
+		}
+		w = append(w, math.Pow(float64(tempt), 2))
+		sum += w[i]
+	}
+	for i, region := range allRegions {
+		region.SetWeight(w[i]/sum)
+	}
 }
 
 // CheckAndPutRegion checks if the region is valid to put,if valid then put.

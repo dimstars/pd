@@ -47,6 +47,7 @@ type RegionInfo struct {
 	interval          *pdpb.TimeInterval
 	replicationStatus *replication_modepb.RegionReplicationStatus
 	timestamp         uint64
+	weight            float64
 }
 
 // NewRegionInfo creates RegionInfo with region's meta and leader peer.
@@ -105,6 +106,8 @@ func RegionFromHeartbeat(heartbeat *pdpb.RegionHeartbeatRequest) *RegionInfo {
 		approximateKeys:   int64(heartbeat.GetApproximateKeys()),
 		interval:          heartbeat.GetInterval(),
 		replicationStatus: heartbeat.GetReplicationStatus(),
+		timestamp:         uint64(time.Now().Unix()),
+		weight:            0.0,
 	}
 
 	classifyVoterAndLearner(region)
@@ -135,6 +138,8 @@ func (r *RegionInfo) Clone(opts ...RegionCreateOption) *RegionInfo {
 		approximateKeys:   r.approximateKeys,
 		interval:          proto.Clone(r.interval).(*pdpb.TimeInterval),
 		replicationStatus: r.replicationStatus,
+		timestamp:         r.timestamp,
+		weight:            r.weight,
 	}
 
 	for _, opt := range opts {
@@ -409,6 +414,20 @@ func (r *RegionInfo) GetReplicationStatus() *replication_modepb.RegionReplicatio
 // GetTimestamp returns the timestamp of the region.
 func (r *RegionInfo) GetTimestamp() uint64 {
 	return r.timestamp
+}
+// SetTimestamp sets the timestamp of the region.
+func (r *RegionInfo) SetTimestamp(timestamp uint64) {
+	r.timestamp = timestamp
+}
+
+// GetWeight returns the weight of the region.
+func (r *RegionInfo) GetWeight() float64 {
+	return r.weight
+}
+
+// SetWeight sets the weight of the region.
+func (r *RegionInfo) SetWeight(weight float64) {
+	r.weight = weight
 }
 
 // regionMap wraps a map[uint64]*core.RegionInfo and supports randomly pick a region.

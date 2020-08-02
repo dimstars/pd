@@ -119,9 +119,11 @@ func (oc *OperatorController) Dispatch(region *core.RegionInfo, source string) {
 			}
 			oc.SendScheduleCommand(region, step, source)
 		case operator.SUCCESS:
-			oc.pushHistory(op)
 			// If successful, remove this region form NewRegions.
-			oc.cluster.RemoveNewRegion(region)
+			if op.Kind() == operator.OpRegion {
+				oc.cluster.RemoveNewRegion(region)
+			}
+			oc.pushHistory(op)
 			if oc.RemoveOperator(op) {
 				oc.PromoteWaitingOperator()
 			}

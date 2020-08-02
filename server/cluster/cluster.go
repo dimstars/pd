@@ -504,6 +504,7 @@ func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 		)
 		saveKV, saveCache, isNew = true, true, true
 	} else {
+		region.SetTimestamp(origin.GetTimestamp())
 		r := region.GetRegionEpoch()
 		o := origin.GetRegionEpoch()
 		if r.GetVersion() > o.GetVersion() {

@@ -1473,7 +1473,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 			meta.Peers[leader],
 			core.SetApproximateKeys(96),
 			core.SetApproximateSize(96),
-			core.SetTimestamp(now - uint64((49-i)*72)),
+			core.SetTimestamp(now-uint64((49-i)*72)),
 			// WithPendingPeers ensures that all regions have pengdingPeers.
 			core.WithPendingPeers(meta.Peers),
 		)
@@ -1499,6 +1499,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		region := tc.Regions.GetRegion(uint64(i*4 + 4))
 		c.Assert(region, NotNil)
 		tc.NewRegions.SetRegion(region)
+		tc.CalculateWeights()
 		c.Assert(hb.Schedule(tc)[0].RegionID(), Equals, uint64(i*4+4))
 		tc.RemoveNewRegion(region)
 	}
@@ -1517,6 +1518,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		region := tc.Regions.GetRegion(uint64(i*4 + 4))
 		c.Assert(region, NotNil)
 		tc.NewRegions.SetRegion(region)
+		tc.CalculateWeights()
 		if hb.Schedule(tc)[0].RegionID() == uint64(i*4+4) {
 			sum++
 		}
@@ -1541,6 +1543,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		tc.NewRegions.SetRegion(region)
 		counts[i] = 0
 	}
+	tc.CalculateWeights()
 	for i := 0; i < 10000; i++ {
 		ops := hb.Schedule(tc)
 		index := (ops[0].RegionID() - 4) / 4
