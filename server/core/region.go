@@ -20,7 +20,6 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"time"
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
@@ -46,8 +45,6 @@ type RegionInfo struct {
 	approximateKeys   int64
 	interval          *pdpb.TimeInterval
 	replicationStatus *replication_modepb.RegionReplicationStatus
-	timestamp         uint64
-	weight            float64
 }
 
 // NewRegionInfo creates RegionInfo with region's meta and leader peer.
@@ -55,7 +52,6 @@ func NewRegionInfo(region *metapb.Region, leader *metapb.Peer, opts ...RegionCre
 	regionInfo := &RegionInfo{
 		meta:      region,
 		leader:    leader,
-		timestamp: uint64(time.Now().Unix()),
 	}
 
 	for _, opt := range opts {
@@ -106,8 +102,6 @@ func RegionFromHeartbeat(heartbeat *pdpb.RegionHeartbeatRequest) *RegionInfo {
 		approximateKeys:   int64(heartbeat.GetApproximateKeys()),
 		interval:          heartbeat.GetInterval(),
 		replicationStatus: heartbeat.GetReplicationStatus(),
-		timestamp:         uint64(time.Now().Unix()),
-		weight:            0.0,
 	}
 
 	classifyVoterAndLearner(region)
@@ -138,8 +132,6 @@ func (r *RegionInfo) Clone(opts ...RegionCreateOption) *RegionInfo {
 		approximateKeys:   r.approximateKeys,
 		interval:          proto.Clone(r.interval).(*pdpb.TimeInterval),
 		replicationStatus: r.replicationStatus,
-		timestamp:         r.timestamp,
-		weight:            r.weight,
 	}
 
 	for _, opt := range opts {
@@ -411,25 +403,6 @@ func (r *RegionInfo) GetReplicationStatus() *replication_modepb.RegionReplicatio
 	return r.replicationStatus
 }
 
-// GetTimestamp returns the timestamp of the region.
-func (r *RegionInfo) GetTimestamp() uint64 {
-	return r.timestamp
-}
-// SetTimestamp sets the timestamp of the region.
-func (r *RegionInfo) SetTimestamp(timestamp uint64) {
-	r.timestamp = timestamp
-}
-
-// GetWeight returns the weight of the region.
-func (r *RegionInfo) GetWeight() float64 {
-	return r.weight
-}
-
-// SetWeight sets the weight of the region.
-func (r *RegionInfo) SetWeight(weight float64) {
-	r.weight = weight
-}
-
 // regionMap wraps a map[uint64]*core.RegionInfo and supports randomly pick a region.
 type regionMap struct {
 	m         map[uint64]*RegionInfo
@@ -570,15 +543,6 @@ func (rst *regionSubTree) RandomRegions(n int, ranges []KeyRange) []*RegionInfo 
 			regions = append(regions, region)
 		}
 	}
-	return regions
-}
-
-func (rst *regionSubTree) RandomNewRegions(n int, ranges []KeyRange, timeThreshold uint64) []*RegionInfo {
-	if rst.length() == 0 {
-		return nil
-	}
-
-	regions := rst.regionTree.RandomNewRegions(n, ranges, timeThreshold)
 	return regions
 }
 

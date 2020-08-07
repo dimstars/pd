@@ -196,13 +196,6 @@ func SetReportInterval(v uint64) RegionCreateOption {
 	}
 }
 
-// SetTimestamp sets the timestamp for the region.
-func SetTimestamp(timestamp uint64) RegionCreateOption {
-	return func(region *RegionInfo) {
-		region.timestamp = timestamp
-	}
-}
-
 // SetRegionConfVer sets the config version for the reigon.
 func SetRegionConfVer(confVer uint64) RegionCreateOption {
 	return func(region *RegionInfo) {

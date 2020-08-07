@@ -15,7 +15,6 @@ package core
 
 import (
 	"bytes"
-	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -30,9 +29,8 @@ import (
 // SelectConfig provides parameters for selecting regions.
 type SelectConfig struct {
 	NewRegionFirst bool
-	// Unit: second
-	TimeThreshold     uint64
-	SelectProbability float64
+	NewProbability float64
+	MaxRegionCount uint64
 }
 
 // BasicCluster provides basic data member and interface for a tikv cluster.
@@ -40,7 +38,7 @@ type BasicCluster struct {
 	sync.RWMutex
 	Stores     *StoresInfo
 	Regions    *RegionsInfo
-	NewRegions *RegionsInfo
+	NewRegions *regionNewTree
 	SelectConf *SelectConfig
 }
 
@@ -49,7 +47,7 @@ func NewBasicCluster() *BasicCluster {
 	return &BasicCluster{
 		Stores:     NewStoresInfo(),
 		Regions:    NewRegionsInfo(),
-		NewRegions: NewRegionsInfo(),
+		NewRegions: newRegionNewTree(),
 		SelectConf: NewSelectConfig(),
 	}
 }
@@ -57,9 +55,9 @@ func NewBasicCluster() *BasicCluster {
 // NewSelectConfig creates a SelectConfig.
 func NewSelectConfig() *SelectConfig {
 	return &SelectConfig{
-		NewRegionFirst:    false,
-		TimeThreshold:     60 * 60,
-		SelectProbability: 0.5,
+		NewRegionFirst: false,
+		NewProbability: 0.5,
+		MaxRegionCount: 1000,
 	}
 }
 
@@ -190,29 +188,15 @@ func (bc *BasicCluster) UpdateStoreStatus(storeID uint64, leaderCount int, regio
 const randomRegionMaxRetry = 10
 
 // RandNewRegion returns a random region in new region set.
-func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPending RegionOption, optOther RegionOption, opts ...RegionOption) *RegionInfo {
+func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo {
 	if bc.SelectConf.NewRegionFirst {
 		rand.Seed(time.Now().UnixNano())
 		p := float64(rand.Intn(100)+1) / 100.0
-		if p <= bc.SelectConf.SelectProbability {
+		if p <= bc.SelectConf.NewProbability {
 			bc.RLock()
-			opts1 := append(opts, optPending)
-			opts2 := append(opts, optOther)
-			regions := bc.NewRegions.pendingPeers[storeID].RandomNewRegions(randomRegionMaxRetry, ranges, bc.SelectConf.TimeThreshold)
-			region := bc.selectRegion(regions, opts1...)
-			if region == nil {
-				regions := bc.NewRegions.leaders[storeID].RandomNewRegions(randomRegionMaxRetry, ranges, bc.SelectConf.TimeThreshold)
-				region = bc.selectRegion(regions, opts2...)
-			}
-			if region == nil {
-				regions := bc.NewRegions.followers[storeID].RandomNewRegions(randomRegionMaxRetry, ranges, bc.SelectConf.TimeThreshold)
-				region = bc.selectRegion(regions, opts2...)
-			}
-			if region == nil {
-				regions := bc.NewRegions.learners[storeID].RandomNewRegions(randomRegionMaxRetry, ranges, bc.SelectConf.TimeThreshold)
-				region = bc.selectRegion(regions, opts2...)
-			}
-			bc.RUnlock()
+			defer bc.RUnlock()
+			index := rand.Intn(bc.NewRegions.length())
+			region := bc.NewRegions.tree.GetAt(index).(*regionNewItem).region
 			return region
 		}
 	}
@@ -221,19 +205,11 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPend
 
 // RemoveNewRegion removes region from NewRegions.
 func (bc *BasicCluster) RemoveNewRegion(region *RegionInfo) {
+	bc.Lock()
 	if bc.SelectConf.NewRegionFirst {
-		bc.NewRegions.RemoveRegion(region)
+		bc.NewRegions.remove(region)
 	}
-}
-
-// RemoveOldRegion removes outdated region from NewRegions.
-func (bc *BasicCluster) RemoveOldRegion() {
-	now := uint64(time.Now().Unix())
-	for _, region := range bc.NewRegions.GetRegions() {
-		if  region.GetTimestamp() < now-bc.SelectConf.TimeThreshold {
-			bc.NewRegions.RemoveRegion(region)
-		}
-	}
+	bc.Unlock()
 }
 
 // RandFollowerRegion returns a random region that has a follower on the store.
@@ -393,41 +369,10 @@ func (bc *BasicCluster) PreCheckPutRegion(region *RegionInfo) (*RegionInfo, erro
 func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	bc.Lock()
 	defer bc.Unlock()
-	if bc.SelectConf.NewRegionFirst && region.GetTimestamp() >= uint64(time.Now().Unix())-bc.SelectConf.TimeThreshold {
-		bc.NewRegions.SetRegion(region)
-		bc.RemoveOldRegion()
-		bc.CalculateWeights()
+	if bc.SelectConf.NewRegionFirst {
+		bc.NewRegions.update(region)
 	}
 	return bc.Regions.SetRegion(region)
-}
-
-// CalculateWeights calculates weights of all regions.
-func (bc *BasicCluster) CalculateWeights() {
-	now := uint64(time.Now().Unix())
-	var tempt uint64
-	allRegions :=bc.NewRegions.GetRegions()
-	w := make([]float64, 0, len(allRegions))
-	sum := 0.0
-	mint := now
-	if mint > bc.SelectConf.TimeThreshold {
-		mint -= bc.SelectConf.TimeThreshold
-	} else {
-		mint = 0
-	}
-
-	for i, region := range allRegions {
-		tempt = region.GetTimestamp()
-		if tempt >= mint {
-			tempt = tempt - mint + 1
-		} else {
-			tempt = 0
-		}
-		w = append(w, math.Pow(float64(tempt), 2))
-		sum += w[i]
-	}
-	for i, region := range allRegions {
-		region.SetWeight(w[i]/sum)
-	}
 }
 
 // CheckAndPutRegion checks if the region is valid to put,if valid then put.
@@ -446,7 +391,7 @@ func (bc *BasicCluster) RemoveRegion(region *RegionInfo) {
 	bc.Lock()
 	defer bc.Unlock()
 	if bc.SelectConf.NewRegionFirst {
-		bc.NewRegions.RemoveRegion(region)
+		bc.NewRegions.remove(region)
 	}
 	bc.Regions.RemoveRegion(region)
 }
@@ -483,7 +428,7 @@ func (bc *BasicCluster) GetOverlaps(region *RegionInfo) []*RegionInfo {
 // RegionSetInformer provides access to a shared informer of regions.
 type RegionSetInformer interface {
 	GetRegionCount() int
-	RandNewRegion(storeID uint64, ranges []KeyRange, optPending RegionOption, optOther RegionOption, opts ...RegionOption) *RegionInfo
+	RandNewRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo
 	RemoveNewRegion(region *RegionInfo)
 	RandFollowerRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo
 	RandLeaderRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo

@@ -504,7 +504,6 @@ func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 		)
 		saveKV, saveCache, isNew = true, true, true
 	} else {
-		region.SetTimestamp(origin.GetTimestamp())
 		r := region.GetRegionEpoch()
 		o := origin.GetRegionEpoch()
 		if r.GetVersion() > o.GetVersion() {
@@ -725,8 +724,8 @@ func (c *RaftCluster) GetStoreRegions(storeID uint64) []*core.RegionInfo {
 }
 
 // RandNewRegion returns a random region in new region set.
-func (c *RaftCluster) RandNewRegion(storeID uint64, ranges []core.KeyRange, optPending core.RegionOption, optOther core.RegionOption, opts ...core.RegionOption) *core.RegionInfo {
-	return c.core.RandNewRegion(storeID, ranges, optPending, optOther, opts...)
+func (c *RaftCluster) RandNewRegion(storeID uint64, ranges []core.KeyRange, opts ...core.RegionOption) *core.RegionInfo {
+	return c.core.RandNewRegion(storeID, ranges, opts...)
 }
 
 // RemoveNewRegion removes region from NewRegions.

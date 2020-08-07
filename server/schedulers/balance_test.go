@@ -16,10 +16,6 @@ package schedulers
 import (
 	"context"
 	"fmt"
-	"math"
-	"math/rand"
-	"time"
-
 	. "github.com/pingcap/check"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
@@ -32,6 +28,8 @@ import (
 	"github.com/pingcap/pd/v4/server/schedule"
 	"github.com/pingcap/pd/v4/server/schedule/checker"
 	"github.com/pingcap/pd/v4/server/schedule/operator"
+	"math"
+	"math/rand"
 )
 
 func newTestReplication(mso *mockoption.ScheduleOptions, maxReplicas int, locationLabels ...string) {
@@ -1449,7 +1447,8 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		id      uint64
 		regions []*metapb.Region
 	)
-	for i := 0; i < 50; i++ {
+	//for i := 0; i < 50; i++ {
+	for i := 49; i >= 0; i-- {
 		peers := []*metapb.Peer{
 			{Id: id + 1, StoreId: 1},
 			{Id: id + 2, StoreId: 2},
@@ -1464,16 +1463,14 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		id += 4
 	}
 	// empty case
-	regions[49].EndKey = []byte("")
-	now := uint64(time.Now().Unix())
-	for i, meta := range regions {
+	regions[0].EndKey = []byte("")
+	for _, meta := range regions {
 		leader := rand.Intn(4) % 3
 		regionInfo := core.NewRegionInfo(
 			meta,
 			meta.Peers[leader],
 			core.SetApproximateKeys(96),
 			core.SetApproximateSize(96),
-			core.SetTimestamp(now-uint64((49-i)*72)),
 			// WithPendingPeers ensures that all regions have pengdingPeers.
 			core.WithPendingPeers(meta.Peers),
 		)
@@ -1488,9 +1485,9 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	// New regions are preferred.
 	tc.SetSelectConfig(
 		&core.SelectConfig{
-			NewRegionFirst:    true,
-			TimeThreshold:     60 * 60,
-			SelectProbability: 1.0,
+			NewRegionFirst: true,
+			NewProbability: 1.0,
+			MaxRegionCount: 1000,
 		})
 	// For each cycle, place a region into the NewRegions set (representing that it is new).
 	// Call the Schedule function and verify that this region is selected.
@@ -1498,8 +1495,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	for i := 10; i < 30; i += 2 {
 		region := tc.Regions.GetRegion(uint64(i*4 + 4))
 		c.Assert(region, NotNil)
-		tc.NewRegions.SetRegion(region)
-		tc.CalculateWeights()
+		tc.PutRegion(region)
 		c.Assert(hb.Schedule(tc)[0].RegionID(), Equals, uint64(i*4+4))
 		tc.RemoveNewRegion(region)
 	}
@@ -1509,16 +1505,15 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	// Regions have the same probability of being selected.
 	tc.SetSelectConfig(
 		&core.SelectConfig{
-			NewRegionFirst:    true,
-			TimeThreshold:     60 * 60,
-			SelectProbability: 0.0,
+			NewRegionFirst: true,
+			NewProbability: 0.0,
+			MaxRegionCount: 1000,
 		})
 	sum := 0
 	for i := 30; i < 50; i++ {
 		region := tc.Regions.GetRegion(uint64(i*4 + 4))
 		c.Assert(region, NotNil)
-		tc.NewRegions.SetRegion(region)
-		tc.CalculateWeights()
+		tc.PutRegion(region)
 		if hb.Schedule(tc)[0].RegionID() == uint64(i*4+4) {
 			sum++
 		}
@@ -1526,35 +1521,4 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	}
 	// The probability of failure of this assertion is 0.02^20.
 	c.Assert(sum, Less, 20)
-
-	// Set the probability to 1.
-	tc.SetSelectConfig(
-		&core.SelectConfig{
-			NewRegionFirst:    true,
-			TimeThreshold:     60 * 60,
-			SelectProbability: 1.0,
-		})
-	// Add multiple regions to NewRegions for more sophisticated probabilistic testing.
-	var counts [4]int
-	tests := []uint64{0, 3, 15, 49}
-	for i, index := range tests {
-		region := tc.Regions.GetRegion(uint64(index*4 + 4))
-		c.Assert(region, NotNil)
-		tc.NewRegions.SetRegion(region)
-		counts[i] = 0
-	}
-	tc.CalculateWeights()
-	for i := 0; i < 10000; i++ {
-		ops := hb.Schedule(tc)
-		index := (ops[0].RegionID() - 4) / 4
-		for j, index2 := range tests {
-			if index == index2 {
-				counts[j]++
-			}
-		}
-	}
-	// The region with less survival time is more likely to be selected.
-	for i := 0; i < len(tests)-1; i++ {
-		c.Assert(counts[i], Less, counts[i+1])
-	}
 }
