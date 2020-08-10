@@ -50,8 +50,8 @@ type RegionInfo struct {
 // NewRegionInfo creates RegionInfo with region's meta and leader peer.
 func NewRegionInfo(region *metapb.Region, leader *metapb.Peer, opts ...RegionCreateOption) *RegionInfo {
 	regionInfo := &RegionInfo{
-		meta:      region,
-		leader:    leader,
+		meta:   region,
+		leader: leader,
 	}
 
 	for _, opt := range opts {

@@ -195,7 +195,25 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, opts ..
 		if p <= bc.SelectConf.NewProbability {
 			bc.RLock()
 			defer bc.RUnlock()
-			index := rand.Intn(bc.NewRegions.length())
+			var index int
+			var temp int
+			len := bc.NewRegions.length()
+			if len == 0 {
+				return nil
+			} else if len < 50 {
+				index = rand.Intn(len)
+			} else {
+				temp = rand.Intn(15)
+				if temp < 8 {
+					index = rand.Intn(len-(len/4)*3) + (len/4)*3
+				} else if temp < 12 {
+					index = rand.Intn(len/4) + (len/4)*2
+				} else if temp < 14 {
+					index = rand.Intn(len/4) + len/4
+				} else {
+					index = rand.Intn(len / 4)
+				}
+			}
 			region := bc.NewRegions.tree.GetAt(index).(*regionNewItem).region
 			return region
 		}
@@ -371,6 +389,9 @@ func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	defer bc.Unlock()
 	if bc.SelectConf.NewRegionFirst {
 		bc.NewRegions.update(region)
+		if uint64(bc.NewRegions.length()) > bc.SelectConf.MaxRegionCount {
+			bc.NewRegions.remove(bc.NewRegions.tree.GetAt(0).(*regionNewItem).region)
+		}
 	}
 	return bc.Regions.SetRegion(region)
 }

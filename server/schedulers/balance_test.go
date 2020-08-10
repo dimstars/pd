@@ -1447,8 +1447,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		id      uint64
 		regions []*metapb.Region
 	)
-	//for i := 0; i < 50; i++ {
-	for i := 49; i >= 0; i-- {
+	for i := 0; i < 1000; i++ {
 		peers := []*metapb.Peer{
 			{Id: id + 1, StoreId: 1},
 			{Id: id + 2, StoreId: 2},
@@ -1457,13 +1456,13 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		regions = append(regions, &metapb.Region{
 			Id:       id + 4,
 			Peers:    peers,
-			StartKey: []byte(fmt.Sprintf("s_%02d", i)),
-			EndKey:   []byte(fmt.Sprintf("s_%02d", i+1)),
+			StartKey: []byte(fmt.Sprintf("s_%04d", i)),
+			EndKey:   []byte(fmt.Sprintf("s_%04d", i+1)),
 		})
 		id += 4
 	}
 	// empty case
-	regions[0].EndKey = []byte("")
+	regions[999].EndKey = []byte("")
 	for _, meta := range regions {
 		leader := rand.Intn(4) % 3
 		regionInfo := core.NewRegionInfo(
@@ -1498,6 +1497,23 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		tc.PutRegion(region)
 		c.Assert(hb.Schedule(tc)[0].RegionID(), Equals, uint64(i*4+4))
 		tc.RemoveNewRegion(region)
+	}
+	// Put all regions into NewRegions set.
+	// The smaller the region ID, the earlier it has been put, and the lower its priority.
+	for i := 0; i < 1000; i++ {
+		region := tc.Regions.GetRegion(uint64(i*4 + 4))
+		c.Assert(region, NotNil)
+		tc.PutRegion(region)
+	}
+	var counts = [4]int{0, 0, 0, 0}
+	for i := 0; i < 10000; i++ {
+		ops := hb.Schedule(tc)
+		index := (ops[0].RegionID() - 4) / 4
+		counts[index/250]++
+	}
+	// The newer region is more likely to be selected.
+	for i := 0; i < 3; i++ {
+		c.Assert(counts[i], Less, counts[i+1])
 	}
 
 	// Set the probability to 0.
