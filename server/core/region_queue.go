@@ -47,7 +47,7 @@ func (queue *regionQueue) getRegions() []*RegionInfo {
 }
 
 // findNode will find the regionQueueNode which has the region with regionID.
-func (queue *regionQueue) findNode(regionID uint64) *regionQueueNode{
+func (queue *regionQueue) findNode(regionID uint64) *regionQueueNode {
 	temp := queue.start
 	for temp != nil {
 		if temp.region.GetID() == regionID {
@@ -73,7 +73,7 @@ func (queue *regionQueue) update(region *RegionInfo) {
 		return
 	}
 	originNode := queue.findNode(region.GetID())
-	if originNode != nil{
+	if originNode != nil {
 		originNode.region = region
 		return
 	}
