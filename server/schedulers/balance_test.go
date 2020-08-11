@@ -1447,7 +1447,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		id      uint64
 		regions []*metapb.Region
 	)
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 1010; i++ {
 		peers := []*metapb.Peer{
 			{Id: id + 1, StoreId: 1},
 			{Id: id + 2, StoreId: 2},
@@ -1462,7 +1462,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		id += 4
 	}
 	// empty case
-	regions[999].EndKey = []byte("")
+	regions[1009].EndKey = []byte("")
 	for _, meta := range regions {
 		leader := rand.Intn(4) % 3
 		regionInfo := core.NewRegionInfo(
@@ -1505,36 +1505,24 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		c.Assert(region, NotNil)
 		tc.PutRegion(region)
 	}
-	var counts = [4]int{0, 0, 0, 0}
-	for i := 0; i < 10000; i++ {
-		ops := hb.Schedule(tc)
-		index := (ops[0].RegionID() - 4) / 4
-		counts[index/250]++
-	}
-	// The newer region is more likely to be selected.
-	for i := 0; i < 3; i++ {
-		c.Assert(counts[i], Less, counts[i+1])
+
+	// The maximum number of new regions is 1000.
+	c.Assert(len(tc.GetNewRegions()), Equals, 1000)
+	for i := 1000; i < 1010; i++ {
+		region := tc.Regions.GetRegion(uint64(i*4 + 4))
+		c.Assert(region, NotNil)
+		tc.PutRegion(region)
+		c.Assert(len(tc.GetNewRegions()), Equals, 1000)
 	}
 
+	c.Assert(tc.RandNewRegion(1, []core.KeyRange{core.NewKeyRange("","")}), NotNil)
 	// Set the probability to 0.
 	// NewRegions won't be used.
-	// Regions have the same probability of being selected.
 	tc.SetSelectConfig(
 		&core.SelectConfig{
 			NewRegionFirst: true,
 			NewProbability: 0.0,
 			MaxRegionCount: 1000,
 		})
-	sum := 0
-	for i := 30; i < 50; i++ {
-		region := tc.Regions.GetRegion(uint64(i*4 + 4))
-		c.Assert(region, NotNil)
-		tc.PutRegion(region)
-		if hb.Schedule(tc)[0].RegionID() == uint64(i*4+4) {
-			sum++
-		}
-		tc.RemoveNewRegion(region)
-	}
-	// The probability of failure of this assertion is 0.02^20.
-	c.Assert(sum, Less, 20)
+	c.Assert(tc.RandNewRegion(1, []core.KeyRange{core.NewKeyRange("","")}), IsNil)
 }

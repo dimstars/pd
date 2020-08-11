@@ -38,7 +38,7 @@ type BasicCluster struct {
 	sync.RWMutex
 	Stores     *StoresInfo
 	Regions    *RegionsInfo
-	NewRegions *regionNewTree
+	NewRegions *regionQueue
 	SelectConf *SelectConfig
 }
 
@@ -47,7 +47,7 @@ func NewBasicCluster() *BasicCluster {
 	return &BasicCluster{
 		Stores:     NewStoresInfo(),
 		Regions:    NewRegionsInfo(),
-		NewRegions: newRegionNewTree(),
+		NewRegions: newRegionQueue(),
 		SelectConf: NewSelectConfig(),
 	}
 }
@@ -99,6 +99,13 @@ func (bc *BasicCluster) GetRegions() []*RegionInfo {
 	bc.RLock()
 	defer bc.RUnlock()
 	return bc.Regions.GetRegions()
+}
+
+// GetNewRegions gets all RegionInfo from NewRegions.
+func (bc *BasicCluster) GetNewRegions() []*RegionInfo {
+	bc.RLock()
+	defer bc.RUnlock()
+	return bc.NewRegions.getRegions()
 }
 
 // GetMetaRegions gets a set of metapb.Region from regionMap.
@@ -195,27 +202,7 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, opts ..
 		if p <= bc.SelectConf.NewProbability {
 			bc.RLock()
 			defer bc.RUnlock()
-			var index int
-			var temp int
-			len := bc.NewRegions.length()
-			if len == 0 {
-				return nil
-			} else if len < 50 {
-				index = rand.Intn(len)
-			} else {
-				temp = rand.Intn(15)
-				if temp < 8 {
-					index = rand.Intn(len-(len/4)*3) + (len/4)*3
-				} else if temp < 12 {
-					index = rand.Intn(len/4) + (len/4)*2
-				} else if temp < 14 {
-					index = rand.Intn(len/4) + len/4
-				} else {
-					index = rand.Intn(len / 4)
-				}
-			}
-			region := bc.NewRegions.tree.GetAt(index).(*regionNewItem).region
-			return region
+			return bc.NewRegions.getAt(rand.Intn(bc.NewRegions.length()))
 		}
 	}
 	return nil
@@ -390,7 +377,7 @@ func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	if bc.SelectConf.NewRegionFirst {
 		bc.NewRegions.update(region)
 		if uint64(bc.NewRegions.length()) > bc.SelectConf.MaxRegionCount {
-			bc.NewRegions.remove(bc.NewRegions.tree.GetAt(0).(*regionNewItem).region)
+			bc.NewRegions.pop()
 		}
 	}
 	return bc.Regions.SetRegion(region)
