@@ -38,7 +38,7 @@ type BasicCluster struct {
 	sync.RWMutex
 	Stores     *StoresInfo
 	Regions    *RegionsInfo
-	NewRegions *regionQueue
+	NewRegions *newRegionCache
 	SelectConf *SelectConfig
 }
 
@@ -47,7 +47,7 @@ func NewBasicCluster() *BasicCluster {
 	return &BasicCluster{
 		Stores:     NewStoresInfo(),
 		Regions:    NewRegionsInfo(),
-		NewRegions: newRegionQueue(),
+		NewRegions: newNewRegionCache(1000),
 		SelectConf: NewSelectConfig(),
 	}
 }
@@ -202,7 +202,7 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, opts ..
 		if p <= bc.SelectConf.NewProbability {
 			bc.RLock()
 			defer bc.RUnlock()
-			return bc.NewRegions.getAt(rand.Intn(bc.NewRegions.length()))
+			return bc.NewRegions.randomRegion()
 		}
 	}
 	return nil
@@ -375,10 +375,7 @@ func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	bc.Lock()
 	defer bc.Unlock()
 	if bc.SelectConf.NewRegionFirst {
-		bc.NewRegions.update(region)
-		if uint64(bc.NewRegions.length()) > bc.SelectConf.MaxRegionCount {
-			bc.NewRegions.pop()
-		}
+		bc.NewRegions.add(region)
 	}
 	return bc.Regions.SetRegion(region)
 }

@@ -14,6 +14,7 @@ package core
 
 type regionQueueNode struct {
 	region *RegionInfo
+	pre    *regionQueueNode
 	next   *regionQueueNode
 }
 
@@ -59,30 +60,33 @@ func (queue *regionQueue) findNode(regionID uint64) *regionQueueNode {
 }
 
 // update updates the RegionInfo or push it into regionQueue.
-func (queue *regionQueue) update(region *RegionInfo) {
+func (queue *regionQueue) update(region *RegionInfo) *regionQueueNode{
 	if region == nil {
-		return
+		return nil
 	}
 	if queue.start == nil {
 		queue.start = &regionQueueNode{
 			region: region,
+			pre:    nil,
 			next:   nil,
 		}
 		queue.len++
 		queue.end = queue.start
-		return
+		return queue.start
 	}
 	originNode := queue.findNode(region.GetID())
 	if originNode != nil {
 		originNode.region = region
-		return
+		return originNode
 	}
 	queue.end.next = &regionQueueNode{
 		region: region,
+		pre:    queue.end,
 		next:   nil,
 	}
 	queue.len++
 	queue.end = queue.end.next
+	return queue.end
 }
 
 // pop deletes the first region in regionQueue and return it.
@@ -92,6 +96,9 @@ func (queue *regionQueue) pop() *RegionInfo {
 	}
 	region := queue.start.region
 	queue.start = queue.start.next
+	if queue.start != nil {
+		queue.start.pre = nil
+	}
 	queue.len--
 	return region
 }
@@ -110,21 +117,71 @@ func (queue *regionQueue) getAt(index int) *RegionInfo {
 
 // remove deletes the region in regionQueue.
 func (queue *regionQueue) remove(region *RegionInfo) {
-	if queue.start == nil {
+	queue.removeNode(queue.findNode(region.GetID()))
+}
+
+// removeNode deletes the regionQueueNode in regionQueue.
+func (queue *regionQueue) removeNode(node *regionQueueNode) {
+	if node == nil {
 		return
 	}
-	if queue.start.region.GetID() == region.GetID() {
-		queue.start = queue.start.next
-		queue.len--
-		return
+	if node.pre != nil {
+		node.pre.next = node.next
+	} else {
+		queue.start = node.next
 	}
-	temp := queue.start
-	for temp.next != nil {
-		if temp.next.region.GetID() == region.GetID() {
-			temp.next = temp.next.next
-			queue.len--
-			return
+	if node.next != nil {
+		node.next.pre = node.pre
+	} else {
+		queue.end = node.pre
+	}
+	queue.len--
+}
+
+// newRegionCache saves the new peer's statistics.
+type newRegionCache struct {
+	maxCount     int
+	regionQueue  *regionQueue
+	queueNodeMap map[uint64]*regionQueueNode // regionID -> regionQueueNode
+}
+
+func newNewRegionCache(max int) *newRegionCache {
+	return &newRegionCache{
+		maxCount:     max,
+		regionQueue:  newRegionQueue(),
+		queueNodeMap: make(map[uint64]*regionQueueNode),
+	}
+}
+
+// add updates the RegionInfo or add it into newRegionCache.
+func (newRegions *newRegionCache) add(region *RegionInfo) {
+	node := newRegions.regionQueue.update(region)
+	if node != nil {
+		newRegions.queueNodeMap[region.GetID()] = node
+		if newRegions.regionQueue.len > newRegions.maxCount {
+			region := newRegions.regionQueue.pop()
+			delete(newRegions.queueNodeMap, region.GetID())
 		}
-		temp = temp.next
 	}
+}
+
+// remove deletes the region in newRegionCache.
+func (newRegions *newRegionCache) remove(region *RegionInfo) {
+	if node, ok := newRegions.queueNodeMap[region.GetID()]; ok {
+		newRegions.regionQueue.removeNode(node)
+		delete(newRegions.queueNodeMap, region.GetID())
+	}
+}
+
+// randomRegion returns a random region from newRegionCache.
+func (newRegions *newRegionCache) randomRegion() *RegionInfo {
+	for _, node := range newRegions.queueNodeMap {
+		return node.region
+	}
+	return nil
+}
+
+// getRegions gets all RegionInfo from newRegionCache.
+func (newRegions *newRegionCache) getRegions() []*RegionInfo {
+	return newRegions.regionQueue.getRegions()
 }
