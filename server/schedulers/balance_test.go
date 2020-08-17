@@ -1486,7 +1486,6 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		&core.SelectConfig{
 			NewRegionFirst: true,
 			NewProbability: 1.0,
-			MaxRegionCount: 1000,
 		})
 	// For each cycle, place a region into the NewRegions set (representing that it is new).
 	// Call the Schedule function and verify that this region is selected.
@@ -1498,15 +1497,13 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		c.Assert(hb.Schedule(tc)[0].RegionID(), Equals, uint64(i*4+4))
 		tc.RemoveNewRegion(region)
 	}
-	// Put all regions into NewRegions set.
-	// The smaller the region ID, the earlier it has been put, and the lower its priority.
+
+	// The maximum number of new regions is 1000.
 	for i := 0; i < 1000; i++ {
 		region := tc.Regions.GetRegion(uint64(i*4 + 4))
 		c.Assert(region, NotNil)
 		tc.PutRegion(region)
 	}
-
-	// The maximum number of new regions is 1000.
 	c.Assert(len(tc.GetNewRegions()), Equals, 1000)
 	for i := 1000; i < 1010; i++ {
 		region := tc.Regions.GetRegion(uint64(i*4 + 4))
@@ -1522,7 +1519,6 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		&core.SelectConfig{
 			NewRegionFirst: true,
 			NewProbability: 0.0,
-			MaxRegionCount: 1000,
 		})
 	c.Assert(tc.RandNewRegion(1, []core.KeyRange{core.NewKeyRange("", "")}), IsNil)
 }

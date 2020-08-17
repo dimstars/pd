@@ -38,29 +38,17 @@ func (queue *regionQueue) length() int {
 
 // getRegions gets all RegionInfo from regionQueue.
 func (queue *regionQueue) getRegions() []*RegionInfo {
-	var regions []*RegionInfo
+	var cache []*RegionInfo
 	temp := queue.start
 	for temp != nil {
-		regions = append(regions, temp.region)
+		cache = append(cache, temp.region)
 		temp = temp.next
 	}
-	return regions
+	return cache
 }
 
-// findNode will find the regionQueueNode which has the region with regionID.
-func (queue *regionQueue) findNode(regionID uint64) *regionQueueNode {
-	temp := queue.start
-	for temp != nil {
-		if temp.region.GetID() == regionID {
-			return temp
-		}
-		temp = temp.next
-	}
-	return nil
-}
-
-// update updates the RegionInfo or push it into regionQueue.
-func (queue *regionQueue) update(region *RegionInfo) *regionQueueNode{
+// push adds region to the end of regionQueue.
+func (queue *regionQueue) push(region *RegionInfo) *regionQueueNode {
 	if region == nil {
 		return nil
 	}
@@ -73,11 +61,6 @@ func (queue *regionQueue) update(region *RegionInfo) *regionQueueNode{
 		queue.len++
 		queue.end = queue.start
 		return queue.start
-	}
-	originNode := queue.findNode(region.GetID())
-	if originNode != nil {
-		originNode.region = region
-		return originNode
 	}
 	queue.end.next = &regionQueueNode{
 		region: region,
@@ -115,11 +98,6 @@ func (queue *regionQueue) getAt(index int) *RegionInfo {
 	return temp.region
 }
 
-// remove deletes the region in regionQueue.
-func (queue *regionQueue) remove(region *RegionInfo) {
-	queue.removeNode(queue.findNode(region.GetID()))
-}
-
 // removeNode deletes the regionQueueNode in regionQueue.
 func (queue *regionQueue) removeNode(node *regionQueueNode) {
 	if node == nil {
@@ -138,50 +116,69 @@ func (queue *regionQueue) removeNode(node *regionQueueNode) {
 	queue.len--
 }
 
-// newRegionCache saves the new peer's statistics.
-type newRegionCache struct {
+type regionCache struct {
 	maxCount     int
 	regionQueue  *regionQueue
-	queueNodeMap map[uint64]*regionQueueNode // regionID -> regionQueueNode
+	queueNodeMap map[uint64]*regionQueueNode
 }
 
-func newNewRegionCache(max int) *newRegionCache {
-	return &newRegionCache{
+func newRegionCache(max int) *regionCache {
+	return &regionCache{
 		maxCount:     max,
 		regionQueue:  newRegionQueue(),
 		queueNodeMap: make(map[uint64]*regionQueueNode),
 	}
 }
 
-// add updates the RegionInfo or add it into newRegionCache.
-func (newRegions *newRegionCache) add(region *RegionInfo) {
-	node := newRegions.regionQueue.update(region)
-	if node != nil {
-		newRegions.queueNodeMap[region.GetID()] = node
-		if newRegions.regionQueue.len > newRegions.maxCount {
-			region := newRegions.regionQueue.pop()
-			delete(newRegions.queueNodeMap, region.GetID())
-		}
+// getNode gets the regionQueueNode which has the region with regionID.
+func (cache *regionCache) getNode(regionID uint64) *regionQueueNode {
+	if node, ok := cache.queueNodeMap[regionID]; ok {
+		return node
 	}
+	return nil
 }
 
-// remove deletes the region in newRegionCache.
-func (newRegions *newRegionCache) remove(region *RegionInfo) {
-	if node, ok := newRegions.queueNodeMap[region.GetID()]; ok {
-		newRegions.regionQueue.removeNode(node)
-		delete(newRegions.queueNodeMap, region.GetID())
-	}
-}
-
-// randomRegion returns a random region from newRegionCache.
-func (newRegions *newRegionCache) randomRegion() *RegionInfo {
-	for _, node := range newRegions.queueNodeMap {
+// getRegion gets the region with regionID.
+func (cache *regionCache) getRegion(regionID uint64) *RegionInfo {
+	if node := cache.getNode(regionID); node != nil {
 		return node.region
 	}
 	return nil
 }
 
-// getRegions gets all RegionInfo from newRegionCache.
-func (newRegions *newRegionCache) getRegions() []*RegionInfo {
-	return newRegions.regionQueue.getRegions()
+// getRegions gets all RegionInfo from regionCache.
+func (cache *regionCache) getRegions() []*RegionInfo {
+	return cache.regionQueue.getRegions()
+}
+
+// update updates the RegionInfo or add it into regionCache.
+func (cache *regionCache) update(region *RegionInfo) {
+	if node := cache.getNode(region.GetID()); node != nil {
+		node.region = region
+		return
+	}
+	node := cache.regionQueue.push(region)
+	if node != nil {
+		cache.queueNodeMap[region.GetID()] = node
+		if cache.regionQueue.len > cache.maxCount {
+			region := cache.regionQueue.pop()
+			delete(cache.queueNodeMap, region.GetID())
+		}
+	}
+}
+
+// remove deletes the region in regionCache.
+func (cache *regionCache) remove(region *RegionInfo) {
+	if node, ok := cache.queueNodeMap[region.GetID()]; ok {
+		cache.regionQueue.removeNode(node)
+		delete(cache.queueNodeMap, region.GetID())
+	}
+}
+
+// randomRegion returns a random region from regionCache.
+func (cache *regionCache) randomRegion() *RegionInfo {
+	for _, node := range cache.queueNodeMap {
+		return node.region
+	}
+	return nil
 }

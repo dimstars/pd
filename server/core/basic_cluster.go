@@ -30,7 +30,6 @@ import (
 type SelectConfig struct {
 	NewRegionFirst bool
 	NewProbability float64
-	MaxRegionCount uint64
 }
 
 // BasicCluster provides basic data member and interface for a tikv cluster.
@@ -38,7 +37,7 @@ type BasicCluster struct {
 	sync.RWMutex
 	Stores     *StoresInfo
 	Regions    *RegionsInfo
-	NewRegions *newRegionCache
+	NewRegions *regionCache
 	SelectConf *SelectConfig
 }
 
@@ -47,7 +46,7 @@ func NewBasicCluster() *BasicCluster {
 	return &BasicCluster{
 		Stores:     NewStoresInfo(),
 		Regions:    NewRegionsInfo(),
-		NewRegions: newNewRegionCache(1000),
+		NewRegions: newRegionCache(1000),
 		SelectConf: NewSelectConfig(),
 	}
 }
@@ -57,7 +56,6 @@ func NewSelectConfig() *SelectConfig {
 	return &SelectConfig{
 		NewRegionFirst: false,
 		NewProbability: 0.5,
-		MaxRegionCount: 1000,
 	}
 }
 
@@ -375,7 +373,7 @@ func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	bc.Lock()
 	defer bc.Unlock()
 	if bc.SelectConf.NewRegionFirst {
-		bc.NewRegions.add(region)
+		bc.NewRegions.update(region)
 	}
 	return bc.Regions.SetRegion(region)
 }
