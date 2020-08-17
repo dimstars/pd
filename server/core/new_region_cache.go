@@ -32,10 +32,6 @@ func newRegionQueue() *regionQueue {
 	}
 }
 
-func (queue *regionQueue) length() int {
-	return queue.len
-}
-
 // getRegions gets all RegionInfo from regionQueue.
 func (queue *regionQueue) getRegions() []*RegionInfo {
 	var cache []*RegionInfo
@@ -86,18 +82,6 @@ func (queue *regionQueue) pop() *RegionInfo {
 	return region
 }
 
-// getAt gets the region at the index in regionQueue.
-func (queue *regionQueue) getAt(index int) *RegionInfo {
-	if queue.len <= index {
-		return nil
-	}
-	temp := queue.start
-	for i := 0; i < index; i++ {
-		temp = temp.next
-	}
-	return temp.region
-}
-
 // removeNode deletes the regionQueueNode in regionQueue.
 func (queue *regionQueue) removeNode(node *regionQueueNode) {
 	if node == nil {
@@ -134,14 +118,6 @@ func newRegionCache(max int) *regionCache {
 func (cache *regionCache) getNode(regionID uint64) *regionQueueNode {
 	if node, ok := cache.queueNodeMap[regionID]; ok {
 		return node
-	}
-	return nil
-}
-
-// getRegion gets the region with regionID.
-func (cache *regionCache) getRegion(regionID uint64) *RegionInfo {
-	if node := cache.getNode(regionID); node != nil {
-		return node.region
 	}
 	return nil
 }
