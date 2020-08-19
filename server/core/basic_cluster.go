@@ -30,6 +30,7 @@ import (
 type SelectConfig struct {
 	NewRegionFirst bool
 	NewProbability float64
+	MxaRegionCount int
 }
 
 // BasicCluster provides basic data member and interface for a tikv cluster.
@@ -46,7 +47,7 @@ func NewBasicCluster() *BasicCluster {
 	return &BasicCluster{
 		Stores:     NewStoresInfo(),
 		Regions:    NewRegionsInfo(),
-		NewRegions: newRegionCache(1000),
+		NewRegions: newRegionCache(),
 		SelectConf: NewSelectConfig(),
 	}
 }
@@ -56,6 +57,7 @@ func NewSelectConfig() *SelectConfig {
 	return &SelectConfig{
 		NewRegionFirst: false,
 		NewProbability: 0.5,
+		MxaRegionCount: 1000,
 	}
 }
 
@@ -374,6 +376,9 @@ func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	defer bc.Unlock()
 	if bc.SelectConf.NewRegionFirst {
 		bc.NewRegions.update(region)
+		if bc.NewRegions.length() > bc.SelectConf.MxaRegionCount {
+			bc.NewRegions.pop()
+		}
 	}
 	return bc.Regions.SetRegion(region)
 }

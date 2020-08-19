@@ -101,17 +101,19 @@ func (queue *regionQueue) removeNode(node *regionQueueNode) {
 }
 
 type regionCache struct {
-	maxCount     int
 	regionQueue  *regionQueue
 	queueNodeMap map[uint64]*regionQueueNode
 }
 
-func newRegionCache(max int) *regionCache {
+func newRegionCache() *regionCache {
 	return &regionCache{
-		maxCount:     max,
 		regionQueue:  newRegionQueue(),
 		queueNodeMap: make(map[uint64]*regionQueueNode),
 	}
+}
+
+func (cache *regionCache) length() int {
+	return cache.regionQueue.len
 }
 
 // getNode gets the regionQueueNode which has the region with regionID.
@@ -136,10 +138,6 @@ func (cache *regionCache) update(region *RegionInfo) {
 	node := cache.regionQueue.push(region)
 	if node != nil {
 		cache.queueNodeMap[region.GetID()] = node
-		if cache.regionQueue.len > cache.maxCount {
-			region := cache.regionQueue.pop()
-			delete(cache.queueNodeMap, region.GetID())
-		}
 	}
 }
 
@@ -149,6 +147,15 @@ func (cache *regionCache) remove(region *RegionInfo) {
 		cache.regionQueue.removeNode(node)
 		delete(cache.queueNodeMap, region.GetID())
 	}
+}
+
+// pop deletes the oldest region and return it.
+func (cache *regionCache) pop() *RegionInfo {
+	if region := cache.regionQueue.pop(); region != nil {
+		delete(cache.queueNodeMap, region.GetID())
+		return region
+	}
+	return nil
 }
 
 // randomRegion returns a random region from regionCache.
