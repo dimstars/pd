@@ -30,7 +30,7 @@ import (
 type SelectConfig struct {
 	NewRegionFirst bool
 	NewProbability float64
-	MxaRegionCount int
+	MaxRegionCount int
 }
 
 // BasicCluster provides basic data member and interface for a tikv cluster.
@@ -55,9 +55,9 @@ func NewBasicCluster() *BasicCluster {
 // NewSelectConfig creates a SelectConfig.
 func NewSelectConfig() *SelectConfig {
 	return &SelectConfig{
-		NewRegionFirst: false,
-		NewProbability: 0.5,
-		MxaRegionCount: 1000,
+		NewRegionFirst: true,
+		NewProbability: 0.0,
+		MaxRegionCount: 100,
 	}
 }
 
@@ -196,12 +196,12 @@ const randomRegionMaxRetry = 10
 
 // RandNewRegion returns a random region in new region set.
 func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo {
+	bc.RLock()
+	defer bc.RUnlock()
 	if bc.SelectConf.NewRegionFirst {
 		rand.Seed(time.Now().UnixNano())
 		p := float64(rand.Intn(100)+1) / 100.0
 		if p <= bc.SelectConf.NewProbability {
-			bc.RLock()
-			defer bc.RUnlock()
 			return bc.NewRegions.randomRegion()
 		}
 	}
@@ -212,6 +212,10 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, opts ..
 func (bc *BasicCluster) RemoveNewRegion(region *RegionInfo) {
 	bc.Lock()
 	if bc.SelectConf.NewRegionFirst {
+		if node := bc.NewRegions.getNode(region.GetID()); node != nil {
+			log.Info("balance new region finish",
+				zap.Uint64("region-id", region.GetID()))
+		}
 		bc.NewRegions.remove(region)
 	}
 	bc.Unlock()
@@ -376,7 +380,7 @@ func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	defer bc.Unlock()
 	if bc.SelectConf.NewRegionFirst {
 		bc.NewRegions.update(region)
-		if bc.NewRegions.length() > bc.SelectConf.MxaRegionCount {
+		if bc.NewRegions.length() > bc.SelectConf.MaxRegionCount {
 			bc.NewRegions.pop()
 		}
 	}
