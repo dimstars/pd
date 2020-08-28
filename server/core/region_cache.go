@@ -159,9 +159,20 @@ func (cache *regionCache) pop() *RegionInfo {
 }
 
 // randomRegion returns a random region from regionCache.
-func (cache *regionCache) randomRegion() *RegionInfo {
+func (cache *regionCache) randomRegion(storeID uint64, ranges []KeyRange, n int) []*RegionInfo {
+	i := 0
+	var regions []*RegionInfo
 	for _, node := range cache.queueNodeMap {
-		return node.region
+		if i >= n {
+			return regions
+		}
+		for _, peer := range node.region.GetPeers() {
+			if peer.GetStoreId() == storeID {
+				regions = append(regions, node.region)
+				i++
+				break
+			}
+		}
 	}
-	return nil
+	return regions
 }

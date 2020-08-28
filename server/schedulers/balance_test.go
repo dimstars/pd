@@ -1486,7 +1486,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		&core.SelectConfig{
 			NewRegionFirst: true,
 			NewProbability: 1.0,
-			MxaRegionCount: 1000,
+			MaxRegionCount: 1000,
 		})
 	// For each cycle, place a region into the NewRegions set (representing that it is new).
 	// Call the Schedule function and verify that this region is selected.
@@ -1520,7 +1520,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		&core.SelectConfig{
 			NewRegionFirst: true,
 			NewProbability: 0.0,
-			MxaRegionCount: 1000,
+			MaxRegionCount: 1000,
 		})
 	c.Assert(tc.RandNewRegion(1, []core.KeyRange{core.NewKeyRange("", "")}), IsNil)
 }

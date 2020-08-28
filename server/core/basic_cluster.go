@@ -56,7 +56,7 @@ func NewBasicCluster() *BasicCluster {
 func NewSelectConfig() *SelectConfig {
 	return &SelectConfig{
 		NewRegionFirst: true,
-		NewProbability: 0.0,
+		NewProbability: 0.5,
 		MaxRegionCount: 100,
 	}
 }
@@ -197,14 +197,16 @@ const randomRegionMaxRetry = 10
 // RandNewRegion returns a random region in new region set.
 func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo {
 	bc.RLock()
-	defer bc.RUnlock()
 	if bc.SelectConf.NewRegionFirst {
 		rand.Seed(time.Now().UnixNano())
 		p := float64(rand.Intn(100)+1) / 100.0
 		if p <= bc.SelectConf.NewProbability {
-			return bc.NewRegions.randomRegion()
+			regions := bc.NewRegions.randomRegion(storeID, ranges, randomRegionMaxRetry)
+			bc.RUnlock()
+			return bc.selectRegion(regions, opts...)
 		}
 	}
+	bc.RUnlock()
 	return nil
 }
 
