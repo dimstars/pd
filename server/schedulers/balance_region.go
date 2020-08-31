@@ -147,30 +147,34 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) []*operator.Opera
 
 		for i := 0; i < balanceRegionRetryLimit; i++ {
 			// Select the new region first.
-			isnew := false
+			count := 0
 			region := cluster.RandNewRegion(sourceID, s.conf.Ranges, opt.HealthRegion(cluster), opt.ReplicatedRegion(cluster))
 			if region == nil {
+				count++
 				log.Info("RandNewRegion return isnil")
 				// Then pick the region that has a pending peer in the source store.
 				// Pending region may means the disk is overload, remove the pending region secondly.
 				region = cluster.RandPendingRegion(sourceID, s.conf.Ranges, opt.HealthAllowPending(cluster), opt.ReplicatedRegion(cluster))
 			} else {
-				isnew = true
 				log.Info("RandNewRegion return notnil")
 			}
 			if region == nil {
+				count++
 				// Then pick the region that has a follower in the source store.
 				region = cluster.RandFollowerRegion(sourceID, s.conf.Ranges, opt.HealthRegion(cluster), opt.ReplicatedRegion(cluster))
 			}
 			if region == nil {
+				count++
 				// Then pick the region has the leader in the source store.
 				region = cluster.RandLeaderRegion(sourceID, s.conf.Ranges, opt.HealthRegion(cluster), opt.ReplicatedRegion(cluster))
 			}
 			if region == nil {
+				count++
 				// Finally pick learner.
 				region = cluster.RandLearnerRegion(sourceID, s.conf.Ranges, opt.HealthRegion(cluster), opt.ReplicatedRegion(cluster))
 			}
 			if region == nil {
+				count++
 				schedulerCounter.WithLabelValues(s.GetName(), "no-region").Inc()
 				continue
 			}
@@ -187,8 +191,11 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) []*operator.Opera
 			if op := s.transferPeer(cluster, region, oldPeer); op != nil {
 				op.Counters = append(op.Counters, schedulerCounter.WithLabelValues(s.GetName(), "new-operator"))
 				log.Info("balance_region schedule return notnil")
-				if isnew {
+				if count == 0 {
 					log.Info("balance_region return new region")
+				}
+				if count == 1 {
+					log.Info("balance_region return old region: pending")
 				}
 				return []*operator.Operator{op}
 			}

@@ -1496,7 +1496,7 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 		c.Assert(region, NotNil)
 		tc.PutRegion(region)
 		c.Assert(hb.Schedule(tc)[0].RegionID(), Equals, uint64(i*4+4))
-		tc.RemoveNewRegion(region)
+		tc.RemoveNewRegion(region.GetID())
 	}
 
 	// The maximum number of new regions is 1000.

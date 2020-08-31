@@ -729,8 +729,8 @@ func (c *RaftCluster) RandNewRegion(storeID uint64, ranges []core.KeyRange, opts
 }
 
 // RemoveNewRegion removes region from NewRegions.
-func (c *RaftCluster) RemoveNewRegion(region *core.RegionInfo) {
-	c.core.RemoveNewRegion(region)
+func (c *RaftCluster) RemoveNewRegion(regionID uint64) {
+	c.core.RemoveNewRegion(regionID)
 }
 
 // RandLeaderRegion returns a random region that has leader on the store.
