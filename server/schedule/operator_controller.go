@@ -532,8 +532,8 @@ func (oc *OperatorController) buryOperator(op *operator.Operator, extraFileds ..
 
 	switch st {
 	case operator.SUCCESS:
-		// If successful, remove this region form NewRegions.
-		if op.Kind() == operator.OpRegion {
+		// If successful, remove this region from NewRegions.
+		if op.Kind() == operator.OpRegion || op.Kind() == operator.OpRegion | operator.OpLeader{
 			oc.cluster.RemoveNewRegion(op.RegionID())
 		}
 		log.Info("operator finish",

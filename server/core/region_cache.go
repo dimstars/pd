@@ -12,6 +12,8 @@
 
 package core
 
+import "bytes"
+
 type regionQueueNode struct {
 	region *RegionInfo
 	pre    *regionQueueNode
@@ -34,13 +36,13 @@ func newRegionQueue() *regionQueue {
 
 // getRegions gets all RegionInfo from regionQueue.
 func (queue *regionQueue) getRegions() []*RegionInfo {
-	var cache []*RegionInfo
+	var regions []*RegionInfo
 	temp := queue.start
 	for temp != nil {
-		cache = append(cache, temp.region)
+		regions = append(regions, temp.region)
 		temp = temp.next
 	}
-	return cache
+	return regions
 }
 
 // push adds region to the end of regionQueue.
@@ -159,20 +161,48 @@ func (cache *regionCache) pop() *RegionInfo {
 }
 
 // randomRegion returns a random region from regionCache.
-func (cache *regionCache) randomRegion(storeID uint64, ranges []KeyRange, n int) []*RegionInfo {
-	i := 0
-	var regions []*RegionInfo
+func (cache *regionCache) randomRegion(storeID uint64, ranges []KeyRange, n int, optPending RegionOption, optOther RegionOption, optAll RegionOption) *RegionInfo {
+	if len(ranges) == 0 {
+		ranges = []KeyRange{NewKeyRange("", "")}
+	}
+
 	for _, node := range cache.queueNodeMap {
-		if i >= n {
-			return regions
+		if !involved(node.region, ranges) {
+			continue
 		}
-		for _, peer := range node.region.GetPeers() {
-			if peer.GetStoreId() == storeID {
-				regions = append(regions, node.region)
-				i++
-				break
+		for _, peer := range node.region.GetPendingPeers() {
+			if peer.GetStoreId() == storeID && optPending(node.region) && optAll(node.region) {
+				return node.region
+			}
+		}
+		for _, peer := range node.region.GetFollowers() {
+			if peer.GetStoreId() == storeID && optOther(node.region) && optAll(node.region) {
+				return node.region
+			}
+		}
+		peer := node.region.GetLeader()
+		if peer.GetStoreId() == storeID && optOther(node.region) && optAll(node.region) {
+			return node.region
+		}
+		for _, peer := range node.region.GetLearners() {
+			if peer.GetStoreId() == storeID && optOther(node.region) && optAll(node.region) {
+				return node.region
 			}
 		}
 	}
-	return regions
+	return nil
+}
+
+func involved(region *RegionInfo, ranges []KeyRange) bool {
+	for _, keyRange := range ranges {
+		startKey := keyRange.StartKey
+		endKey := keyRange.EndKey
+		if len(startKey) > 0 && len(endKey) > 0 && bytes.Compare(startKey, endKey) > 0 {
+			continue
+		}
+		if (len(startKey) == 0 || (len(region.GetStartKey()) > 0 && bytes.Compare(region.GetStartKey(), startKey) >= 0 )) && (len(endKey) == 0 || (len(region.GetEndKey()) > 0 && bytes.Compare(region.GetEndKey(), endKey) <= 0)) {
+			return true
+		}
+	}
+	return false
 }

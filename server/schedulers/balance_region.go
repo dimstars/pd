@@ -148,15 +148,15 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) []*operator.Opera
 		for i := 0; i < balanceRegionRetryLimit; i++ {
 			// Select the new region first.
 			count := 0
-			region := cluster.RandNewRegion(sourceID, s.conf.Ranges, opt.HealthRegion(cluster), opt.ReplicatedRegion(cluster))
+			region := cluster.RandNewRegion(sourceID, s.conf.Ranges, opt.HealthAllowPending(cluster), opt.HealthRegion(cluster), opt.ReplicatedRegion(cluster))
 			if region == nil {
 				count++
-				log.Info("RandNewRegion return isnil")
+				log.Info("my RandNewRegion return isnil")
 				// Then pick the region that has a pending peer in the source store.
 				// Pending region may means the disk is overload, remove the pending region secondly.
 				region = cluster.RandPendingRegion(sourceID, s.conf.Ranges, opt.HealthAllowPending(cluster), opt.ReplicatedRegion(cluster))
 			} else {
-				log.Info("RandNewRegion return notnil")
+				log.Info("my RandNewRegion return notnil")
 			}
 			if region == nil {
 				count++
@@ -190,18 +190,30 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) []*operator.Opera
 			oldPeer := region.GetStorePeer(sourceID)
 			if op := s.transferPeer(cluster, region, oldPeer); op != nil {
 				op.Counters = append(op.Counters, schedulerCounter.WithLabelValues(s.GetName(), "new-operator"))
-				log.Info("balance_region schedule return notnil")
-				if count == 0 {
-					log.Info("balance_region return new region")
+				log.Info("my balance_region schedule return notnil")
+				switch count {
+				case 0:
+					log.Info("my balance_region return new region")
+				case 1:
+					log.Info("my balance_region return old region: pending")
+				case 2:
+					log.Info("my balance_region return old region: follower")
+				case 3:
+					log.Info("my balance_region return old region: leader")
+				case 4:
+					log.Info("my balance_region return old region: learner")
 				}
-				if count == 1 {
-					log.Info("balance_region return old region: pending")
-				}
+				log.Info("my balance_region select region", zap.Uint64("region-id", op.RegionID()))
+				/*for i, region := range cluster.GetNewRegions() {
+					log.Info("my get all regions id",
+						zap.Int("num", i),
+						zap.Uint64("region-id", region.GetID()))
+				}*/
 				return []*operator.Operator{op}
 			}
 		}
 	}
-	log.Info("balance_region schedule return isnil")
+	log.Info("my balance_region schedule return isnil")
 	return nil
 }
 
