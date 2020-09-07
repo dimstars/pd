@@ -57,7 +57,7 @@ func NewSelectConfig() *SelectConfig {
 	return &SelectConfig{
 		NewRegionFirst: true,
 		NewProbability: 1.0,
-		MaxRegionCount: 10,
+		MaxRegionCount: 100,
 	}
 }
 

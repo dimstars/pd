@@ -175,14 +175,29 @@ func (cache *regionCache) randomRegion(storeID uint64, ranges []KeyRange, n int,
 				return node.region
 			}
 		}
+	}
+	for _, node := range cache.queueNodeMap {
+		if !involved(node.region, ranges) {
+			continue
+		}
 		for _, peer := range node.region.GetFollowers() {
 			if peer.GetStoreId() == storeID && optOther(node.region) && optAll(node.region) {
 				return node.region
 			}
 		}
+	}
+	for _, node := range cache.queueNodeMap {
+		if !involved(node.region, ranges) {
+			continue
+		}
 		peer := node.region.GetLeader()
 		if peer.GetStoreId() == storeID && optOther(node.region) && optAll(node.region) {
 			return node.region
+		}
+	}
+	for _, node := range cache.queueNodeMap {
+		if !involved(node.region, ranges) {
+			continue
 		}
 		for _, peer := range node.region.GetLearners() {
 			if peer.GetStoreId() == storeID && optOther(node.region) && optAll(node.region) {

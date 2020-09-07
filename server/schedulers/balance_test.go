@@ -1491,13 +1491,17 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	// For each cycle, place a region into the NewRegions set (representing that it is new).
 	// Call the Schedule function and verify that this region is selected.
 	// This region is then removed from the NewRegions set before next cycle.
-	for i := 10; i < 30; i += 2 {
+	for i := 100; i < 110; i++ {
 		region := tc.Regions.GetRegion(uint64(i*4 + 4))
 		c.Assert(region, NotNil)
+		region = tc.NewRegions.getRegion(uint64(i*4 + 4))
+		c.Assert(region, IsNil)
 		tc.PutRegion(region)
-		//hb.Schedule(tc)
-		c.Assert(hb.Schedule(tc)[0].RegionID(), Equals, uint64(i*4+4))
-		tc.RemoveNewRegion(region.GetID())
+	}
+	for i := 100; i < 110; i++ {
+		id := hb.Schedule(tc)[0].RegionID()
+		c.Assert(id, GreaterEqual, uint64(100*4+4))
+		c.Assert(id, LessEqual, uint64(110*4+4))
 	}
 
 	// The maximum number of new regions is 1000.
