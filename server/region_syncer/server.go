@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2018 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,12 +20,13 @@ import (
 	"time"
 
 	"github.com/juju/ratelimit"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-	"github.com/pingcap/pd/v4/pkg/grpcutil"
-	"github.com/pingcap/pd/v4/server/core"
-	"github.com/pkg/errors"
+	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/pkg/grpcutil"
+	"github.com/tikv/pd/server/core"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -205,7 +206,7 @@ func (s *RegionSyncer) syncHistoryRegion(request *pdpb.SyncRegionRequest, stream
 				s.limit.Wait(int64(resp.Size()))
 				lastIndex += len(metas)
 				if err := stream.Send(resp); err != nil {
-					log.Error("failed to send sync region response", zap.Error(err))
+					log.Error("failed to send sync region response", errs.ZapError(errs.ErrGRPCSend, err))
 				}
 				metas = metas[:0]
 				stats = stats[:0]
@@ -257,7 +258,7 @@ func (s *RegionSyncer) broadcast(regions *pdpb.SyncRegionResponse) {
 	for name, sender := range s.streams {
 		err := sender.Send(regions)
 		if err != nil {
-			log.Error("region syncer send data meet error", zap.Error(err))
+			log.Error("region syncer send data meet error", errs.ZapError(errs.ErrGRPCSend, err))
 			failed = append(failed, name)
 		}
 	}

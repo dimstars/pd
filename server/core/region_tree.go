@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2016 TiKV Project Authors.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -19,7 +19,8 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
-	"github.com/pingcap/pd/v4/pkg/btree"
+	"github.com/tikv/pd/pkg/btree"
+	"github.com/tikv/pd/pkg/errs"
 	"go.uber.org/zap"
 )
 
@@ -229,7 +230,7 @@ func (t *regionTree) RandomRegion(ranges []KeyRange) *RegionInfo {
 			if len(endKey) > 0 && bytes.Compare(startKey, endKey) > 0 {
 				log.Error("wrong range keys",
 					zap.String("start-key", string(HexRegionKey(startKey))),
-					zap.String("end-key", string(HexRegionKey(endKey))))
+					zap.String("end-key", string(HexRegionKey(endKey))), errs.ZapError(errs.ErrWrongRangeKeys))
 			}
 			continue
 		}

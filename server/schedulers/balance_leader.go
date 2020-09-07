@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2017 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,13 +18,13 @@ import (
 	"strconv"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/pd/v4/server/core"
-	"github.com/pingcap/pd/v4/server/schedule"
-	"github.com/pingcap/pd/v4/server/schedule/filter"
-	"github.com/pingcap/pd/v4/server/schedule/operator"
-	"github.com/pingcap/pd/v4/server/schedule/opt"
-	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/server/core"
+	"github.com/tikv/pd/server/schedule"
+	"github.com/tikv/pd/server/schedule/filter"
+	"github.com/tikv/pd/server/schedule/operator"
+	"github.com/tikv/pd/server/schedule/opt"
 	"go.uber.org/zap"
 )
 
@@ -42,11 +42,11 @@ func init() {
 		return func(v interface{}) error {
 			conf, ok := v.(*balanceLeaderSchedulerConfig)
 			if !ok {
-				return ErrScheduleConfigNotExist
+				return errs.ErrScheduleConfigNotExist.FastGenByArgs()
 			}
 			ranges, err := getKeyRanges(args)
 			if err != nil {
-				return errors.WithStack(err)
+				return err
 			}
 			conf.Ranges = ranges
 			conf.Name = BalanceLeaderName
@@ -78,7 +78,7 @@ type balanceLeaderScheduler struct {
 
 // newBalanceLeaderScheduler creates a scheduler that tends to keep leaders on
 // each store balanced.
-func newBalanceLeaderScheduler(opController *schedule.OperatorController, conf *balanceLeaderSchedulerConfig, opts ...BalanceLeaderCreateOption) schedule.Scheduler {
+func newBalanceLeaderScheduler(opController *schedule.OperatorController, conf *balanceLeaderSchedulerConfig, options ...BalanceLeaderCreateOption) schedule.Scheduler {
 	base := NewBaseScheduler(opController)
 
 	s := &balanceLeaderScheduler{
@@ -87,8 +87,8 @@ func newBalanceLeaderScheduler(opController *schedule.OperatorController, conf *
 		opController:  opController,
 		counter:       balanceLeaderCounter,
 	}
-	for _, opt := range opts {
-		opt(s)
+	for _, option := range options {
+		option(s)
 	}
 	s.filters = []filter.Filter{
 		filter.StoreStateFilter{ActionScope: s.GetName(), TransferLeader: true},
@@ -158,11 +158,10 @@ func (l *balanceLeaderScheduler) Schedule(cluster opt.Cluster) []*operator.Opera
 			sourceID := source.GetID()
 			log.Debug("store leader score", zap.String("scheduler", l.GetName()), zap.Uint64("source-store", sourceID))
 			sourceStoreLabel := strconv.FormatUint(sourceID, 10)
-			sourceAddress := source.GetAddress()
-			l.counter.WithLabelValues("high-score", sourceAddress, sourceStoreLabel).Inc()
+			l.counter.WithLabelValues("high-score", sourceStoreLabel).Inc()
 			for j := 0; j < balanceLeaderRetryLimit; j++ {
 				if ops := l.transferLeaderOut(cluster, source, opInfluence); len(ops) > 0 {
-					ops[0].Counters = append(ops[0].Counters, l.counter.WithLabelValues("transfer-out", sourceAddress, sourceStoreLabel))
+					ops[0].Counters = append(ops[0].Counters, l.counter.WithLabelValues("transfer-out", sourceStoreLabel))
 					return ops
 				}
 			}
@@ -173,12 +172,11 @@ func (l *balanceLeaderScheduler) Schedule(cluster opt.Cluster) []*operator.Opera
 			targetID := target.GetID()
 			log.Debug("store leader score", zap.String("scheduler", l.GetName()), zap.Uint64("target-store", targetID))
 			targetStoreLabel := strconv.FormatUint(targetID, 10)
-			targetAddress := target.GetAddress()
-			l.counter.WithLabelValues("low-score", targetAddress, targetStoreLabel).Inc()
+			l.counter.WithLabelValues("low-score", targetStoreLabel).Inc()
 
 			for j := 0; j < balanceLeaderRetryLimit; j++ {
 				if ops := l.transferLeaderIn(cluster, target); len(ops) > 0 {
-					ops[0].Counters = append(ops[0].Counters, l.counter.WithLabelValues("transfer-in", targetAddress, targetStoreLabel))
+					ops[0].Counters = append(ops[0].Counters, l.counter.WithLabelValues("transfer-in", targetStoreLabel))
 					return ops
 				}
 			}
@@ -200,7 +198,11 @@ func (l *balanceLeaderScheduler) transferLeaderOut(cluster opt.Cluster, source *
 		return nil
 	}
 	targets := cluster.GetFollowerStores(region)
-	targets = filter.SelectTargetStores(targets, l.filters, cluster)
+	finalFilters := l.filters
+	if leaderFilter := filter.NewPlacementLeaderSafeguard(l.GetName(), cluster, region, source); leaderFilter != nil {
+		finalFilters = append(l.filters, leaderFilter)
+	}
+	targets = filter.SelectTargetStores(targets, finalFilters, cluster)
 	leaderSchedulePolicy := l.opController.GetLeaderSchedulePolicy()
 	sort.Slice(targets, func(i, j int) bool {
 		kind := core.NewScheduleKind(core.LeaderKind, leaderSchedulePolicy)
@@ -240,7 +242,20 @@ func (l *balanceLeaderScheduler) transferLeaderIn(cluster opt.Cluster, target *c
 		schedulerCounter.WithLabelValues(l.GetName(), "no-leader").Inc()
 		return nil
 	}
-	return l.createOperator(cluster, region, source, target)
+	targets := []*core.StoreInfo{
+		target,
+	}
+	finalFilters := l.filters
+	if leaderFilter := filter.NewPlacementLeaderSafeguard(l.GetName(), cluster, region, source); leaderFilter != nil {
+		finalFilters = append(l.filters, leaderFilter)
+	}
+	targets = filter.SelectTargetStores(targets, finalFilters, cluster)
+	if len(targets) < 1 {
+		log.Debug("region has no target store", zap.String("scheduler", l.GetName()), zap.Uint64("region-id", region.GetID()))
+		schedulerCounter.WithLabelValues(l.GetName(), "no-target-store").Inc()
+		return nil
+	}
+	return l.createOperator(cluster, region, source, targets[0])
 }
 
 // createOperator creates the operator according to the source and target store.
@@ -266,15 +281,15 @@ func (l *balanceLeaderScheduler) createOperator(cluster opt.Cluster, region *cor
 
 	op, err := operator.CreateTransferLeaderOperator(BalanceLeaderType, cluster, region, region.GetLeader().GetStoreId(), targetID, operator.OpLeader)
 	if err != nil {
-		log.Debug("fail to create balance leader operator", zap.Error(err))
+		log.Debug("fail to create balance leader operator", errs.ZapError(err))
 		return nil
 	}
 	sourceLabel := strconv.FormatUint(sourceID, 10)
 	targetLabel := strconv.FormatUint(targetID, 10)
 	op.Counters = append(op.Counters,
 		schedulerCounter.WithLabelValues(l.GetName(), "new-operator"),
-		l.counter.WithLabelValues("move-leader", source.GetAddress()+"-out", sourceLabel),
-		l.counter.WithLabelValues("move-leader", target.GetAddress()+"-in", targetLabel),
+		l.counter.WithLabelValues("move-leader", sourceLabel+"-out"),
+		l.counter.WithLabelValues("move-leader", targetLabel+"-in"),
 		balanceDirectionCounter.WithLabelValues(l.GetName(), sourceLabel, targetLabel),
 	)
 	return []*operator.Operator{op}

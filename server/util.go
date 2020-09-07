@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2016 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,13 +20,14 @@ import (
 	"path"
 	"time"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-	"github.com/pingcap/pd/v4/pkg/etcdutil"
-	"github.com/pingcap/pd/v4/pkg/typeutil"
-	"github.com/pingcap/pd/v4/server/cluster"
-	"github.com/pingcap/pd/v4/server/config"
-	"github.com/pkg/errors"
+	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/pkg/etcdutil"
+	"github.com/tikv/pd/pkg/typeutil"
+	"github.com/tikv/pd/server/config"
+	"github.com/tikv/pd/server/versioninfo"
 	"go.etcd.io/etcd/clientv3"
 	"go.uber.org/zap"
 )
@@ -35,32 +36,23 @@ const (
 	requestTimeout = etcdutil.DefaultRequestTimeout
 )
 
-// Version information.
-var (
-	PDReleaseVersion = "None"
-	PDBuildTS        = "None"
-	PDGitHash        = "None"
-	PDGitBranch      = "None"
-	PDEdition        = "None"
-)
-
 // LogPDInfo prints the PD version information.
 func LogPDInfo() {
 	log.Info("Welcome to Placement Driver (PD)")
-	log.Info("PD", zap.String("release-version", PDReleaseVersion))
-	log.Info("PD", zap.String("edition", PDEdition))
-	log.Info("PD", zap.String("git-hash", PDGitHash))
-	log.Info("PD", zap.String("git-branch", PDGitBranch))
-	log.Info("PD", zap.String("utc-build-time", PDBuildTS))
+	log.Info("PD", zap.String("release-version", versioninfo.PDReleaseVersion))
+	log.Info("PD", zap.String("edition", versioninfo.PDEdition))
+	log.Info("PD", zap.String("git-hash", versioninfo.PDGitHash))
+	log.Info("PD", zap.String("git-branch", versioninfo.PDGitBranch))
+	log.Info("PD", zap.String("utc-build-time", versioninfo.PDBuildTS))
 }
 
 // PrintPDInfo prints the PD version information without log info.
 func PrintPDInfo() {
-	fmt.Println("Release Version:", PDReleaseVersion)
-	fmt.Println("Edition:", PDEdition)
-	fmt.Println("Git Commit Hash:", PDGitHash)
-	fmt.Println("Git Branch:", PDGitBranch)
-	fmt.Println("UTC Build Time: ", PDBuildTS)
+	fmt.Println("Release Version:", versioninfo.PDReleaseVersion)
+	fmt.Println("Edition:", versioninfo.PDEdition)
+	fmt.Println("Git Commit Hash:", versioninfo.PDGitHash)
+	fmt.Println("Git Branch:", versioninfo.PDGitBranch)
+	fmt.Println("UTC Build Time: ", versioninfo.PDBuildTS)
 }
 
 // PrintConfigCheckMsg prints the message about configuration checks.
@@ -77,9 +69,9 @@ func PrintConfigCheckMsg(cfg *config.Config) {
 
 // CheckPDVersion checks if PD needs to be upgraded.
 func CheckPDVersion(opt *config.PersistOptions) {
-	pdVersion := *cluster.MinSupportedVersion(cluster.Base)
-	if PDReleaseVersion != "None" {
-		pdVersion = *cluster.MustParseVersion(PDReleaseVersion)
+	pdVersion := versioninfo.MinSupportedVersion(versioninfo.Base)
+	if versioninfo.PDReleaseVersion != "None" {
+		pdVersion = versioninfo.MustParseVersion(versioninfo.PDReleaseVersion)
 	}
 	clusterVersion := *opt.GetClusterVersion()
 	log.Info("load cluster version", zap.Stringer("cluster-version", clusterVersion))
@@ -109,7 +101,7 @@ func initOrGetClusterID(c *clientv3.Client, key string) (uint64, error) {
 		Else(clientv3.OpGet(key)).
 		Commit()
 	if err != nil {
-		return 0, errors.WithStack(err)
+		return 0, errs.ErrEtcdTxn.Wrap(err).GenWithStackByCause()
 	}
 
 	// Txn commits ok, return the generated cluster ID.
@@ -119,12 +111,12 @@ func initOrGetClusterID(c *clientv3.Client, key string) (uint64, error) {
 
 	// Otherwise, parse the committed cluster ID.
 	if len(resp.Responses) == 0 {
-		return 0, errors.Errorf("txn returns empty response: %v", resp)
+		return 0, errs.ErrEtcdTxn.FastGenByArgs()
 	}
 
 	response := resp.Responses[0].GetResponseRange()
 	if response == nil || len(response.Kvs) != 1 {
-		return 0, errors.Errorf("txn returns invalid range response: %v", resp)
+		return 0, errs.ErrEtcdTxn.FastGenByArgs()
 	}
 
 	return typeutil.BytesToUint64(response.Kvs[0].Value)

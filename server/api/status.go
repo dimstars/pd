@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2017 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,8 @@ package api
 import (
 	"net/http"
 
-	"github.com/pingcap/pd/v4/server"
+	"github.com/tikv/pd/server"
+	"github.com/tikv/pd/server/versioninfo"
 	"github.com/unrolled/render"
 )
 
@@ -45,9 +46,9 @@ func newStatusHandler(svr *server.Server, rd *render.Render) *statusHandler {
 // @Router /status [get]
 func (h *statusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	version := status{
-		BuildTS:        server.PDBuildTS,
-		GitHash:        server.PDGitHash,
-		Version:        server.PDReleaseVersion,
+		BuildTS:        versioninfo.PDBuildTS,
+		GitHash:        versioninfo.PDGitHash,
+		Version:        versioninfo.PDReleaseVersion,
 		StartTimestamp: h.svr.StartTimestamp(),
 	}
 

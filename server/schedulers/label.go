@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2018 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,13 +15,12 @@ package schedulers
 
 import (
 	"github.com/pingcap/log"
-	"github.com/pingcap/pd/v4/server/core"
-	"github.com/pingcap/pd/v4/server/schedule"
-	"github.com/pingcap/pd/v4/server/schedule/filter"
-	"github.com/pingcap/pd/v4/server/schedule/operator"
-	"github.com/pingcap/pd/v4/server/schedule/opt"
-	"github.com/pingcap/pd/v4/server/schedule/selector"
-	"github.com/pkg/errors"
+	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/server/core"
+	"github.com/tikv/pd/server/schedule"
+	"github.com/tikv/pd/server/schedule/filter"
+	"github.com/tikv/pd/server/schedule/operator"
+	"github.com/tikv/pd/server/schedule/opt"
 	"go.uber.org/zap"
 )
 
@@ -37,11 +36,11 @@ func init() {
 		return func(v interface{}) error {
 			conf, ok := v.(*labelSchedulerConfig)
 			if !ok {
-				return ErrScheduleConfigNotExist
+				return errs.ErrScheduleConfigNotExist.FastGenByArgs()
 			}
 			ranges, err := getKeyRanges(args)
 			if err != nil {
-				return errors.WithStack(err)
+				return err
 			}
 			conf.Ranges = ranges
 			conf.Name = LabelName
@@ -120,7 +119,7 @@ func (s *labelScheduler) Schedule(cluster opt.Cluster) []*operator.Operator {
 			}
 			f := filter.NewExcludedFilter(s.GetName(), nil, excludeStores)
 
-			target := selector.NewCandidates(cluster.GetFollowerStores(region)).
+			target := filter.NewCandidates(cluster.GetFollowerStores(region)).
 				FilterTarget(cluster, filter.StoreStateFilter{ActionScope: LabelName, TransferLeader: true}, f).
 				RandomPick()
 			if target == nil {
@@ -131,7 +130,7 @@ func (s *labelScheduler) Schedule(cluster opt.Cluster) []*operator.Operator {
 
 			op, err := operator.CreateTransferLeaderOperator("label-reject-leader", cluster, region, id, target.GetID(), operator.OpLeader)
 			if err != nil {
-				log.Debug("fail to create transfer label reject leader operator", zap.Error(err))
+				log.Debug("fail to create transfer label reject leader operator", errs.ZapError(err))
 				return nil
 			}
 			op.Counters = append(op.Counters, schedulerCounter.WithLabelValues(s.GetName(), "new-operator"))

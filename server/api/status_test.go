@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2017 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import (
 	"io/ioutil"
 
 	. "github.com/pingcap/check"
-	"github.com/pingcap/pd/v4/server"
+	"github.com/tikv/pd/server/versioninfo"
 )
 
 var _ = Suite(&testStatusAPISuite{})
@@ -28,9 +28,9 @@ type testStatusAPISuite struct{}
 func checkStatusResponse(c *C, body []byte) {
 	got := status{}
 	c.Assert(json.Unmarshal(body, &got), IsNil)
-	c.Assert(got.BuildTS, Equals, server.PDBuildTS)
-	c.Assert(got.GitHash, Equals, server.PDGitHash)
-	c.Assert(got.Version, Equals, server.PDReleaseVersion)
+	c.Assert(got.BuildTS, Equals, versioninfo.PDBuildTS)
+	c.Assert(got.GitHash, Equals, versioninfo.PDGitHash)
+	c.Assert(got.Version, Equals, versioninfo.PDReleaseVersion)
 }
 
 func (s *testStatusAPISuite) TestStatus(c *C) {

@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2017 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,8 +24,8 @@ import (
 
 	"github.com/coreos/pkg/capnslog"
 	zaplog "github.com/pingcap/log"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"github.com/tikv/pd/pkg/errs"
 	"go.etcd.io/etcd/raft"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -217,7 +217,7 @@ func StringToLogFormatter(format string, disableTimestamp bool) log.Formatter {
 func InitFileLog(cfg *zaplog.FileLogConfig) error {
 	if st, err := os.Stat(cfg.Filename); err == nil {
 		if st.IsDir() {
-			return errors.New("can't use directory as log file name")
+			return errs.ErrInitFileLog.FastGenByArgs("can't use directory as log file name")
 		}
 	}
 	if cfg.MaxSize == 0 {

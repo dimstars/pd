@@ -5,9 +5,9 @@ import (
 	"io/ioutil"
 	"time"
 
-	"github.com/pingcap/pd/v4/pkg/tempurl"
-	"github.com/pingcap/pd/v4/pkg/typeutil"
-	"github.com/pingcap/pd/v4/server/config"
+	"github.com/tikv/pd/pkg/tempurl"
+	"github.com/tikv/pd/pkg/typeutil"
+	"github.com/tikv/pd/server/config"
 )
 
 const (
@@ -41,6 +41,7 @@ type SimConfig struct {
 
 // NewSimConfig create a new configuration of the simulator.
 func NewSimConfig(serverLogLevel string) *SimConfig {
+	config.DefaultStoreLimit = config.StoreLimit{AddPeer: 2000, RemovePeer: 2000}
 	cfg := &config.Config{
 		Name:       "pd",
 		ClientUrls: tempurl.Alloc(),

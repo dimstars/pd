@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2016 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,21 +26,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/pkg/grpcutil"
+	"github.com/tikv/pd/pkg/metricutil"
+	"github.com/tikv/pd/pkg/typeutil"
+	"github.com/tikv/pd/server/schedule/storelimit"
+	"github.com/tikv/pd/server/versioninfo"
+
 	"github.com/BurntSushi/toml"
 	"github.com/coreos/go-semver/semver"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
-	"github.com/pingcap/pd/v4/server/schedule/storelimit"
-	"github.com/pkg/errors"
 	"go.etcd.io/etcd/embed"
 	"go.etcd.io/etcd/pkg/transport"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-
-	"github.com/pingcap/pd/v4/pkg/grpcutil"
-	"github.com/pingcap/pd/v4/pkg/metricutil"
-	"github.com/pingcap/pd/v4/pkg/typeutil"
-	"github.com/pingcap/pd/v4/server/schedule"
 )
 
 // Config is the pd server configuration.
@@ -63,6 +64,7 @@ type Config struct {
 
 	InitialCluster      string `toml:"initial-cluster" json:"initial-cluster"`
 	InitialClusterState string `toml:"initial-cluster-state" json:"initial-cluster-state"`
+	InitialClusterToken string `toml:"initial-cluster-token" json:"initial-cluster-token"`
 
 	// Join to an existing pd cluster, a string of endpoints.
 	Join string `toml:"join" json:"join"`
@@ -186,6 +188,7 @@ const (
 	defaultClientUrls          = "http://127.0.0.1:2379"
 	defaultPeerUrls            = "http://127.0.0.1:2380"
 	defaultInitialClusterState = embed.ClusterStateFlagNew
+	defaultInitialClusterToken = "pd-cluster"
 
 	// etcd use 100ms for heartbeat and 1s for election timeout.
 	// We can enlarge both a little to reduce the network aggression.
@@ -202,6 +205,7 @@ const (
 	defaultLeaderPriorityCheckInterval = time.Minute
 
 	defaultUseRegionStorage = true
+	defaultTraceRegionFlow  = true
 	defaultMaxResetTSGap    = 24 * time.Hour
 	defaultKeyType          = "table"
 
@@ -216,6 +220,7 @@ const (
 )
 
 var (
+	defaultEnableTelemetry = true
 	defaultRuntimeServices = []string{}
 	defaultLocationLabels  = []string{}
 	// DefaultStoreLimit is the default store limit of add peer and remove peer.
@@ -223,6 +228,16 @@ var (
 	// DefaultTiFlashStoreLimit is the default TiFlash store limit of add peer and remove peer.
 	DefaultTiFlashStoreLimit StoreLimit = StoreLimit{AddPeer: 30, RemovePeer: 30}
 )
+
+func init() {
+	initByLDFlags(versioninfo.PDEdition)
+}
+
+func initByLDFlags(edition string) {
+	if edition != versioninfo.CommunityEdition {
+		defaultEnableTelemetry = false
+	}
+}
 
 // StoreLimit is the default limit of adding peer and removing peer when putting stores.
 type StoreLimit struct {
@@ -291,7 +306,10 @@ func adjustDuration(v *typeutil.Duration, defValue time.Duration) {
 
 func adjustSchedulers(v *SchedulerConfigs, defValue SchedulerConfigs) {
 	if len(*v) == 0 {
-		*v = defValue
+		// Make a copy to avoid changing DefaultSchedulers unexpectedly.
+		// When reloading from storage, the config is passed to json.Unmarshal.
+		// Without clone, the DefaultSchedulers could be overwritten.
+		*v = append(defValue[:0:0], defValue...)
 	}
 }
 
@@ -319,18 +337,26 @@ func (c *Config) Parse(arguments []string) error {
 		}
 
 		// Backward compatibility for toml config
-		if c.LogFileDeprecated != "" && c.Log.File.Filename == "" {
-			c.Log.File.Filename = c.LogFileDeprecated
+		if c.LogFileDeprecated != "" {
 			msg := fmt.Sprintf("log-file in %s is deprecated, use [log.file] instead", c.configFile)
 			c.WarningMsgs = append(c.WarningMsgs, msg)
+			if c.Log.File.Filename == "" {
+				c.Log.File.Filename = c.LogFileDeprecated
+			}
 		}
-		if c.LogLevelDeprecated != "" && c.Log.Level == "" {
-			c.Log.Level = c.LogLevelDeprecated
+		if c.LogLevelDeprecated != "" {
 			msg := fmt.Sprintf("log-level in %s is deprecated, use [log] instead", c.configFile)
 			c.WarningMsgs = append(c.WarningMsgs, msg)
+			if c.Log.Level == "" {
+				c.Log.Level = c.LogLevelDeprecated
+			}
 		}
 		if meta.IsDefined("schedule", "disable-raft-learner") {
 			msg := fmt.Sprintf("disable-raft-learner in %s is deprecated", c.configFile)
+			c.WarningMsgs = append(c.WarningMsgs, msg)
+		}
+		if meta.IsDefined("dashboard", "disable-telemetry") {
+			msg := fmt.Sprintf("disable-telemetry in %s is deprecated, use enable-telemetry instead", c.configFile)
 			c.WarningMsgs = append(c.WarningMsgs, msg)
 		}
 	}
@@ -456,6 +482,7 @@ func (c *Config) Adjust(meta *toml.MetaData) error {
 	}
 
 	adjustString(&c.InitialClusterState, defaultInitialClusterState)
+	adjustString(&c.InitialClusterToken, defaultInitialClusterToken)
 
 	if len(c.Join) > 0 {
 		if _, err := url.Parse(c.Join); err != nil {
@@ -503,6 +530,8 @@ func (c *Config) Adjust(meta *toml.MetaData) error {
 	if !configMetaData.IsDefined("enable-grpc-gateway") {
 		c.EnableGRPCGateway = defaultEnableGRPCGateway
 	}
+
+	c.Dashboard.adjust(configMetaData.Child("dashboard"))
 
 	c.ReplicationMode.adjust(configMetaData.Child("replication-mode"))
 
@@ -768,6 +797,7 @@ func (c *ScheduleConfig) adjust(meta *configMetaData) error {
 	}
 	adjustFloat64(&c.LowSpaceRatio, defaultLowSpaceRatio)
 	adjustFloat64(&c.HighSpaceRatio, defaultHighSpaceRatio)
+
 	adjustSchedulers(&c.Schedulers, DefaultSchedulers)
 
 	for k, b := range c.migrateConfigurationMap() {
@@ -845,7 +875,7 @@ func (c *ScheduleConfig) Validate() error {
 		return errors.New("low-space-ratio should be larger than high-space-ratio")
 	}
 	for _, scheduleConfig := range c.Schedulers {
-		if !schedule.IsSchedulerRegistered(scheduleConfig.Type) {
+		if !IsSchedulerRegistered(scheduleConfig.Type) {
 			return errors.Errorf("create func of %v is not registered, maybe misspelled", scheduleConfig.Type)
 		}
 	}
@@ -928,8 +958,18 @@ type ReplicationConfig struct {
 	// StrictlyMatchLabel strictly checks if the label of TiKV is matched with LocationLabels.
 	StrictlyMatchLabel bool `toml:"strictly-match-label" json:"strictly-match-label,string"`
 
-	// When PlacementRules feature is enabled. MaxReplicas and LocationLabels are not uesd any more.
+	// When PlacementRules feature is enabled. MaxReplicas, LocationLabels and IsolationLabels are not used any more.
 	EnablePlacementRules bool `toml:"enable-placement-rules" json:"enable-placement-rules,string"`
+
+	// IsolationLevel is used to isolate replicas explicitly and forcibly if it's not empty.
+	// Its value must be empty or one of LocationLabels.
+	// Example:
+	// location-labels = ["zone", "rack", "host"]
+	// isolation-level = "zone"
+	// With configuration like above, PD ensure that all replicas be placed in different zones.
+	// Even if a zone is down, PD will not try to make up replicas in other zone
+	// because other zones already have replicas on it.
+	IsolationLevel string `toml:"isolation-level" json:"isolation-level"`
 }
 
 func (c *ReplicationConfig) clone() *ReplicationConfig {
@@ -940,16 +980,25 @@ func (c *ReplicationConfig) clone() *ReplicationConfig {
 		LocationLabels:       locationLabels,
 		StrictlyMatchLabel:   c.StrictlyMatchLabel,
 		EnablePlacementRules: c.EnablePlacementRules,
+		IsolationLevel:       c.IsolationLevel,
 	}
 }
 
 // Validate is used to validate if some replication configurations are right.
 func (c *ReplicationConfig) Validate() error {
+	foundIsolationLevel := false
 	for _, label := range c.LocationLabels {
 		err := ValidateLabels([]*metapb.StoreLabel{{Key: label}})
 		if err != nil {
 			return err
 		}
+		// IsolationLevel should be empty or one of LocationLabels
+		if !foundIsolationLevel && label == c.IsolationLevel {
+			foundIsolationLevel = true
+		}
+	}
+	if c.IsolationLevel != "" && !foundIsolationLevel {
+		return errors.New("isolation-level must be one of location-labels or empty")
 	}
 	return nil
 }
@@ -981,6 +1030,8 @@ type PDServerConfig struct {
 	MetricStorage string `toml:"metric-storage" json:"metric-storage"`
 	// There are some values supported: "auto", "none", or a specific address, default: "auto"
 	DashboardAddress string `toml:"dashboard-address" json:"dashboard-address"`
+	// TraceRegionFlow the option to update flow information of regions
+	TraceRegionFlow bool `toml:"trace-region-flow" json:"trace-region-flow,string"`
 }
 
 func (c *PDServerConfig) adjust(meta *configMetaData) error {
@@ -996,6 +1047,9 @@ func (c *PDServerConfig) adjust(meta *configMetaData) error {
 	}
 	if !meta.IsDefined("dashboard-address") {
 		c.DashboardAddress = defaultDashboardAddress
+	}
+	if !meta.IsDefined("trace-region-flow") {
+		c.TraceRegionFlow = defaultTraceRegionFlow
 	}
 	return c.Validate()
 }
@@ -1056,7 +1110,7 @@ func ParseUrls(s string) ([]url.URL, error) {
 	for _, item := range items {
 		u, err := url.Parse(item)
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return nil, errs.ErrURLParse.Wrap(err).GenWithStackByCause()
 		}
 
 		urls = append(urls, *u)
@@ -1069,7 +1123,7 @@ func ParseUrls(s string) ([]url.URL, error) {
 func (c *Config) SetupLogger() error {
 	lg, p, err := log.InitLogger(&c.Log, zap.AddStacktrace(zapcore.FatalLevel))
 	if err != nil {
-		return err
+		return errs.ErrInitLogger.Wrap(err).FastGenWithCause()
 	}
 	c.logger = lg
 	c.logProps = p
@@ -1126,6 +1180,7 @@ func (c *Config) GenEmbedEtcdConfig() (*embed.Config, error) {
 	cfg.WalDir = ""
 	cfg.InitialCluster = c.InitialCluster
 	cfg.ClusterState = c.InitialClusterState
+	cfg.InitialClusterToken = c.InitialClusterToken
 	cfg.EnablePprof = true
 	cfg.PreVote = c.PreVote
 	cfg.StrictReconfigCheck = !c.DisableStrictReconfigCheck
@@ -1181,16 +1236,18 @@ func (c *Config) GenEmbedEtcdConfig() (*embed.Config, error) {
 
 // DashboardConfig is the configuration for tidb-dashboard.
 type DashboardConfig struct {
-	TiDBCAPath       string `toml:"tidb-cacert-path" json:"tidb_cacert_path"`
-	TiDBCertPath     string `toml:"tidb-cert-path" json:"tidb_cert_path"`
-	TiDBKeyPath      string `toml:"tidb-key-path" json:"tidb_key_path"`
-	PublicPathPrefix string `toml:"public-path-prefix" json:"public_path_prefix"`
-	InternalProxy    bool   `toml:"internal-proxy" json:"internal_proxy"`
-	DisableTelemetry bool   `toml:"disable-telemetry" json:"disable_telemetry"`
+	TiDBCAPath       string `toml:"tidb-cacert-path" json:"tidb-cacert-path"`
+	TiDBCertPath     string `toml:"tidb-cert-path" json:"tidb-cert-path"`
+	TiDBKeyPath      string `toml:"tidb-key-path" json:"tidb-key-path"`
+	PublicPathPrefix string `toml:"public-path-prefix" json:"public-path-prefix"`
+	InternalProxy    bool   `toml:"internal-proxy" json:"internal-proxy"`
+	EnableTelemetry  bool   `toml:"enable-telemetry" json:"enable-telemetry"`
+	// WARN: DisableTelemetry is deprecated.
+	DisableTelemetry bool `toml:"disable-telemetry" json:"disable-telemetry,omitempty"`
 }
 
 // ToTiDBTLSConfig generates tls config for connecting to TiDB, used by tidb-dashboard.
-func (c DashboardConfig) ToTiDBTLSConfig() (*tls.Config, error) {
+func (c *DashboardConfig) ToTiDBTLSConfig() (*tls.Config, error) {
 	if (len(c.TiDBCertPath) != 0 && len(c.TiDBKeyPath) != 0) || len(c.TiDBCAPath) != 0 {
 		tlsInfo := transport.TLSInfo{
 			CertFile:      c.TiDBCertPath,
@@ -1204,6 +1261,13 @@ func (c DashboardConfig) ToTiDBTLSConfig() (*tls.Config, error) {
 		return tlsConfig, nil
 	}
 	return nil, nil
+}
+
+func (c *DashboardConfig) adjust(meta *configMetaData) {
+	if !meta.IsDefined("enable-telemetry") {
+		c.EnableTelemetry = defaultEnableTelemetry
+	}
+	c.EnableTelemetry = c.EnableTelemetry && !c.DisableTelemetry
 }
 
 // ReplicationModeConfig is the configuration for the replication policy.

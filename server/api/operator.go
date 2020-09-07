@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2016 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,9 +18,9 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
-	"github.com/pingcap/pd/v4/pkg/apiutil"
-	"github.com/pingcap/pd/v4/server"
-	"github.com/pingcap/pd/v4/server/schedule/operator"
+	"github.com/tikv/pd/pkg/apiutil"
+	"github.com/tikv/pd/server"
+	"github.com/tikv/pd/server/schedule/operator"
 	"github.com/unrolled/render"
 )
 
@@ -275,7 +275,8 @@ func (h *operatorHandler) Post(w http.ResponseWriter, r *http.Request) {
 			h.r.JSON(w, http.StatusBadRequest, "missing region id")
 			return
 		}
-		if err := h.AddScatterRegionOperator(uint64(regionID)); err != nil {
+		group, _ := input["group"].(string)
+		if err := h.AddScatterRegionOperator(uint64(regionID), group); err != nil {
 			h.r.JSON(w, http.StatusInternalServerError, err.Error())
 			return
 		}

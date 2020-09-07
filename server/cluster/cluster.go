@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2016 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,29 +22,31 @@ import (
 
 	"github.com/coreos/go-semver/semver"
 	"github.com/gogo/protobuf/proto"
-	"github.com/pingcap/errcode"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/kvproto/pkg/replication_modepb"
 	"github.com/pingcap/log"
-	"github.com/pingcap/pd/v4/pkg/cache"
-	"github.com/pingcap/pd/v4/pkg/component"
-	"github.com/pingcap/pd/v4/pkg/etcdutil"
-	"github.com/pingcap/pd/v4/pkg/logutil"
-	"github.com/pingcap/pd/v4/pkg/typeutil"
-	"github.com/pingcap/pd/v4/server/config"
-	"github.com/pingcap/pd/v4/server/core"
-	"github.com/pingcap/pd/v4/server/id"
-	syncer "github.com/pingcap/pd/v4/server/region_syncer"
-	"github.com/pingcap/pd/v4/server/replication"
-	"github.com/pingcap/pd/v4/server/schedule"
-	"github.com/pingcap/pd/v4/server/schedule/checker"
-	"github.com/pingcap/pd/v4/server/schedule/opt"
-	"github.com/pingcap/pd/v4/server/schedule/placement"
-	"github.com/pingcap/pd/v4/server/schedule/storelimit"
-	"github.com/pingcap/pd/v4/server/statistics"
-	"github.com/pkg/errors"
+	"github.com/tikv/pd/pkg/cache"
+	"github.com/tikv/pd/pkg/component"
+	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/pkg/etcdutil"
+	"github.com/tikv/pd/pkg/keyutil"
+	"github.com/tikv/pd/pkg/logutil"
+	"github.com/tikv/pd/pkg/typeutil"
+	"github.com/tikv/pd/server/config"
+	"github.com/tikv/pd/server/core"
+	"github.com/tikv/pd/server/id"
+	syncer "github.com/tikv/pd/server/region_syncer"
+	"github.com/tikv/pd/server/replication"
+	"github.com/tikv/pd/server/schedule"
+	"github.com/tikv/pd/server/schedule/checker"
+	"github.com/tikv/pd/server/schedule/opt"
+	"github.com/tikv/pd/server/schedule/placement"
+	"github.com/tikv/pd/server/schedule/storelimit"
+	"github.com/tikv/pd/server/statistics"
+	"github.com/tikv/pd/server/versioninfo"
 	"go.etcd.io/etcd/clientv3"
 	"go.uber.org/zap"
 )
@@ -100,8 +102,9 @@ type RaftCluster struct {
 	storesStats     *statistics.StoresStats
 	hotSpotCache    *statistics.HotCache
 
-	coordinator    *coordinator
-	suspectRegions *cache.TTLUint64 // suspectRegions are regions that may need fix
+	coordinator      *coordinator
+	suspectRegions   *cache.TTLUint64 // suspectRegions are regions that may need fix
+	suspectKeyRanges *cache.TTLString // suspect key-range regions that may need fix
 
 	wg           sync.WaitGroup
 	quit         chan struct{}
@@ -112,6 +115,7 @@ type RaftCluster struct {
 	httpClient  *http.Client
 
 	replicationMode *replication.ModeManager
+	traceRegionFlow bool
 
 	// It's used to manage components.
 	componentManager *component.Manager
@@ -202,6 +206,8 @@ func (c *RaftCluster) InitCluster(id id.Allocator, opt *config.PersistOptions, s
 	c.changedRegions = make(chan *core.RegionInfo, defaultChangedRegionsLimit)
 	c.hotSpotCache = statistics.NewHotCache()
 	c.suspectRegions = cache.NewIDTTL(c.ctx, time.Minute, 3*time.Minute)
+	c.suspectKeyRanges = cache.NewStringTTL(c.ctx, time.Minute, 3*time.Minute)
+	c.traceRegionFlow = opt.GetPDServerConfig().TraceRegionFlow
 }
 
 // Start starts a cluster.
@@ -422,11 +428,11 @@ func (c *RaftCluster) SetStorage(s *core.Storage) {
 }
 
 // AddSuspectRegions adds regions to suspect list.
-func (c *RaftCluster) AddSuspectRegions(ids ...uint64) {
+func (c *RaftCluster) AddSuspectRegions(regionIDs ...uint64) {
 	c.Lock()
 	defer c.Unlock()
-	for _, id := range ids {
-		c.suspectRegions.Put(id)
+	for _, regionID := range regionIDs {
+		c.suspectRegions.Put(regionID, nil)
 	}
 }
 
@@ -434,7 +440,7 @@ func (c *RaftCluster) AddSuspectRegions(ids ...uint64) {
 func (c *RaftCluster) GetSuspectRegions() []uint64 {
 	c.RLock()
 	defer c.RUnlock()
-	return c.suspectRegions.GetAll()
+	return c.suspectRegions.GetAllID()
 }
 
 // RemoveSuspectRegion removes region from suspect list.
@@ -442,6 +448,39 @@ func (c *RaftCluster) RemoveSuspectRegion(id uint64) {
 	c.Lock()
 	defer c.Unlock()
 	c.suspectRegions.Remove(id)
+}
+
+// AddSuspectKeyRange adds the key range with the its ruleID as the key
+// The instance of each keyRange is like following format:
+// [2][]byte: start key/end key
+func (c *RaftCluster) AddSuspectKeyRange(start, end []byte) {
+	c.Lock()
+	defer c.Unlock()
+	c.suspectKeyRanges.Put(keyutil.BuildKeyRangeKey(start, end), [2][]byte{start, end})
+}
+
+// PopOneSuspectKeyRange gets one suspect keyRange group.
+// it would return value and true if pop success, or return empty [][2][]byte and false
+// if suspectKeyRanges couldn't pop keyRange group.
+func (c *RaftCluster) PopOneSuspectKeyRange() ([2][]byte, bool) {
+	c.Lock()
+	defer c.Unlock()
+	_, value, success := c.suspectKeyRanges.Pop()
+	if !success {
+		return [2][]byte{}, false
+	}
+	v, ok := value.([2][]byte)
+	if !ok {
+		return [2][]byte{}, false
+	}
+	return v, true
+}
+
+// ClearSuspectKeyRanges clears the suspect keyRanges, only for unit test
+func (c *RaftCluster) ClearSuspectKeyRanges() {
+	c.Lock()
+	defer c.Unlock()
+	c.suspectKeyRanges.Clear()
 }
 
 // HandleStoreHeartbeat updates the store status.
@@ -452,7 +491,7 @@ func (c *RaftCluster) HandleStoreHeartbeat(stats *pdpb.StoreStats) error {
 	storeID := stats.GetStoreId()
 	store := c.GetStore(storeID)
 	if store == nil {
-		return core.NewStoreNotFoundErr(storeID)
+		return errors.Errorf("store %v not found", storeID)
 	}
 	newStore := store.Clone(core.SetStoreStats(stats), core.SetLastHeartbeatTS(time.Now()))
 	if newStore.IsLowSpace(c.GetLowSpaceRatio()) {
@@ -462,8 +501,8 @@ func (c *RaftCluster) HandleStoreHeartbeat(stats *pdpb.StoreStats) error {
 			zap.Uint64("available", newStore.GetAvailable()))
 	}
 	if newStore.NeedPersist() && c.storage != nil {
-		if err := c.storage.SaveStore(store.GetMeta()); err != nil {
-			log.Error("failed to persist store", zap.Uint64("store-id", newStore.GetID()))
+		if err := c.storage.SaveStore(newStore.GetMeta()); err != nil {
+			log.Error("failed to persist store", zap.Uint64("store-id", newStore.GetID()), errs.ZapError(err))
 		} else {
 			newStore = newStore.Clone(core.SetLastPersistTime(time.Now()))
 		}
@@ -472,6 +511,7 @@ func (c *RaftCluster) HandleStoreHeartbeat(stats *pdpb.StoreStats) error {
 	c.storesStats.Observe(newStore.GetID(), newStore.GetStoreStats())
 	c.storesStats.UpdateTotalBytesRate(c.core.GetStores)
 	c.storesStats.UpdateTotalKeysRate(c.core.GetStores)
+	c.storesStats.FilterUnhealthyStore(c)
 
 	// c.limiter is nil before "start" is called
 	if c.limiter != nil && c.opt.GetStoreLimitMode() == "auto" {
@@ -551,10 +591,10 @@ func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 			saveCache = true
 		}
 
-		if region.GetBytesWritten() != origin.GetBytesWritten() ||
+		if c.traceRegionFlow && (region.GetBytesWritten() != origin.GetBytesWritten() ||
 			region.GetBytesRead() != origin.GetBytesRead() ||
 			region.GetKeysWritten() != origin.GetKeysWritten() ||
-			region.GetKeysRead() != origin.GetKeysRead() {
+			region.GetKeysRead() != origin.GetKeysRead()) {
 			saveCache, needSync = true, true
 		}
 
@@ -590,7 +630,7 @@ func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 					log.Error("failed to delete region from storage",
 						zap.Uint64("region-id", item.GetID()),
 						zap.Stringer("region-meta", core.RegionToHexMeta(item.GetMeta())),
-						zap.Error(err))
+						errs.ZapError(err))
 				}
 			}
 		}
@@ -642,7 +682,7 @@ func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 			log.Error("failed to save region to storage",
 				zap.Uint64("region-id", region.GetID()),
 				zap.Stringer("region-meta", core.RegionToHexMeta(region.GetMeta())),
-				zap.Error(err))
+				errs.ZapError(err))
 		}
 		regionEventCounter.WithLabelValues("update_kv").Inc()
 	}
@@ -806,6 +846,7 @@ func (c *RaftCluster) GetRegionStats(startKey, endKey []byte) *statistics.Region
 }
 
 // GetStoresStats returns stores' statistics from cluster.
+// And it will be unnecessary to filter unhealthy store, because it has been solved in process heartbeat
 func (c *RaftCluster) GetStoresStats() *statistics.StoresStats {
 	c.RLock()
 	defer c.RUnlock()
@@ -879,12 +920,12 @@ func (c *RaftCluster) PutStore(store *metapb.Store, force bool) error {
 		return errors.Errorf("invalid put store %v", store)
 	}
 
-	v, err := ParseVersion(store.GetVersion())
+	v, err := versioninfo.ParseVersion(store.GetVersion())
 	if err != nil {
 		return errors.Errorf("invalid put store %v, error: %s", store, err)
 	}
 	clusterVersion := *c.opt.GetClusterVersion()
-	if !IsCompatible(clusterVersion, *v) {
+	if !versioninfo.IsCompatible(clusterVersion, *v) {
 		return errors.Errorf("version should compatible with version  %s, got %s", clusterVersion, v)
 	}
 
@@ -958,13 +999,12 @@ func (c *RaftCluster) checkStoreLabels(s *core.StoreInfo) error {
 // RemoveStore marks a store as offline in cluster.
 // State transition: Up -> Offline.
 func (c *RaftCluster) RemoveStore(storeID uint64) error {
-	op := errcode.Op("store.remove")
 	c.Lock()
 	defer c.Unlock()
 
 	store := c.GetStore(storeID)
 	if store == nil {
-		return op.AddTo(core.NewStoreNotFoundErr(storeID))
+		return errs.ErrStoreNotFound.FastGenByArgs(storeID)
 	}
 
 	// Remove an offline store should be OK, nothing to do.
@@ -973,7 +1013,7 @@ func (c *RaftCluster) RemoveStore(storeID uint64) error {
 	}
 
 	if store.IsTombstone() {
-		return op.AddTo(core.StoreTombstonedErr{StoreID: storeID})
+		return errs.ErrStoreTombstone.FastGenByArgs(storeID)
 	}
 
 	newStore := store.Clone(core.SetStoreState(metapb.StoreState_Offline))
@@ -997,7 +1037,7 @@ func (c *RaftCluster) BuryStore(storeID uint64, force bool) error {
 
 	store := c.GetStore(storeID)
 	if store == nil {
-		return core.NewStoreNotFoundErr(storeID)
+		return errs.ErrStoreNotFound.FastGenByArgs(storeID)
 	}
 
 	// Bury a tombstone store should be OK, nothing to do.
@@ -1007,9 +1047,9 @@ func (c *RaftCluster) BuryStore(storeID uint64, force bool) error {
 
 	if store.IsUp() {
 		if !force {
-			return errors.New("store is still up, please remove store gracefully")
+			return errs.ErrStoreIsUp.FastGenByArgs()
 		}
-		log.Warn("forcedly bury store", zap.Stringer("store", store.GetMeta()))
+		log.Warn("force bury store", zap.Stringer("store", store.GetMeta()))
 	}
 
 	newStore := store.Clone(core.SetStoreState(metapb.StoreState_Tombstone))
@@ -1047,7 +1087,7 @@ func (c *RaftCluster) SetStoreState(storeID uint64, state metapb.StoreState) err
 
 	store := c.GetStore(storeID)
 	if store == nil {
-		return core.NewStoreNotFoundErr(storeID)
+		return errs.ErrStoreNotFound.FastGenByArgs(storeID)
 	}
 
 	newStore := store.Clone(core.SetStoreState(state))
@@ -1064,7 +1104,7 @@ func (c *RaftCluster) SetStoreWeight(storeID uint64, leaderWeight, regionWeight 
 
 	store := c.GetStore(storeID)
 	if store == nil {
-		return core.NewStoreNotFoundErr(storeID)
+		return errs.ErrStoreNotFound.FastGenByArgs(storeID)
 	}
 
 	if err := c.storage.SaveStoreWeight(storeID, leaderWeight, regionWeight); err != nil {
@@ -1114,7 +1154,7 @@ func (c *RaftCluster) checkStores() {
 			if err := c.BuryStore(offlineStore.GetId(), false); err != nil {
 				log.Error("bury store failed",
 					zap.Stringer("store", offlineStore),
-					zap.Error(err))
+					errs.ZapError(err))
 			}
 		} else {
 			offlineStores = append(offlineStores, offlineStore)
@@ -1145,7 +1185,7 @@ func (c *RaftCluster) RemoveTombStoneRecords() error {
 			if err != nil {
 				log.Error("delete store failed",
 					zap.Stringer("store", store.GetMeta()),
-					zap.Error(err))
+					errs.ZapError(err))
 				return err
 			}
 			c.RemoveStoreLimit(store.GetID())
@@ -1200,7 +1240,7 @@ func (c *RaftCluster) collectClusterMetrics() {
 	c.regionStats.Collect()
 	c.labelLevelStats.Collect()
 	// collect hot cache metrics
-	c.hotSpotCache.CollectMetrics(c.storesStats)
+	c.hotSpotCache.CollectMetrics()
 }
 
 func (c *RaftCluster) resetClusterMetrics() {
@@ -1218,7 +1258,7 @@ func (c *RaftCluster) resetClusterMetrics() {
 func (c *RaftCluster) collectHealthStatus() {
 	members, err := GetMembers(c.etcdClient)
 	if err != nil {
-		log.Error("get members error", zap.Error(err))
+		log.Error("get members error", errs.ZapError(err))
 	}
 	unhealth := CheckHealth(c.httpClient, members)
 	for _, member := range members {
@@ -1267,36 +1307,32 @@ func (c *RaftCluster) AllocID() (uint64, error) {
 func (c *RaftCluster) OnStoreVersionChange() {
 	c.RLock()
 	defer c.RUnlock()
-	var (
-		minVersion     *semver.Version
-		clusterVersion *semver.Version
-	)
-
+	var minVersion *semver.Version
 	stores := c.GetStores()
 	for _, s := range stores {
 		if s.IsTombstone() {
 			continue
 		}
-		v := MustParseVersion(s.GetVersion())
+		v := versioninfo.MustParseVersion(s.GetVersion())
 
 		if minVersion == nil || v.LessThan(*minVersion) {
 			minVersion = v
 		}
 	}
-	clusterVersion = c.opt.GetClusterVersion()
+	clusterVersion := c.opt.GetClusterVersion()
 	// If the cluster version of PD is less than the minimum version of all stores,
 	// it will update the cluster version.
 	failpoint.Inject("versionChangeConcurrency", func() {
 		time.Sleep(500 * time.Millisecond)
 	})
 
-	if (*clusterVersion).LessThan(*minVersion) {
+	if minVersion != nil && clusterVersion.LessThan(*minVersion) {
 		if !c.opt.CASClusterVersion(clusterVersion, minVersion) {
 			log.Error("cluster version changed by API at the same time")
 		}
 		err := c.opt.Persist(c.storage)
 		if err != nil {
-			log.Error("persist cluster version meet error", zap.Error(err))
+			log.Error("persist cluster version meet error", errs.ZapError(err))
 		}
 		log.Info("cluster version changed",
 			zap.Stringer("old-cluster-version", clusterVersion),
@@ -1309,12 +1345,16 @@ func (c *RaftCluster) changedRegionNotifier() <-chan *core.RegionInfo {
 }
 
 // IsFeatureSupported checks if the feature is supported by current cluster.
-func (c *RaftCluster) IsFeatureSupported(f Feature) bool {
-	c.RLock()
-	defer c.RUnlock()
+func (c *RaftCluster) IsFeatureSupported(f versioninfo.Feature) bool {
 	clusterVersion := *c.opt.GetClusterVersion()
-	minSupportVersion := *MinSupportedVersion(f)
-	return !clusterVersion.LessThan(minSupportVersion)
+	minSupportVersion := *versioninfo.MinSupportedVersion(f)
+	// For features before version 5.0 (such as BatchSplit), strict version checks are performed according to the
+	// original logic. But according to Semantic Versioning, specify a version MAJOR.MINOR.PATCH, PATCH is used when you
+	// make backwards compatible bug fixes. In version 5.0 and later, we need to strictly comply.
+	if versioninfo.IsCompatible(minSupportVersion, *versioninfo.MinSupportedVersion(versioninfo.Version4_0)) {
+		return !clusterVersion.LessThan(minSupportVersion)
+	}
+	return versioninfo.IsCompatible(minSupportVersion, clusterVersion)
 }
 
 // GetConfig gets config from cluster.
@@ -1433,7 +1473,7 @@ func (c *RaftCluster) IsCrossTableMergeEnabled() bool {
 	return c.opt.IsCrossTableMergeEnabled()
 }
 
-// GetPatrolRegionInterval returns the interval of patroling region.
+// GetPatrolRegionInterval returns the interval of patrolling region.
 func (c *RaftCluster) GetPatrolRegionInterval() time.Duration {
 	return c.opt.GetPatrolRegionInterval()
 }
@@ -1451,6 +1491,11 @@ func (c *RaftCluster) GetMaxReplicas() int {
 // GetLocationLabels returns the location labels for each region
 func (c *RaftCluster) GetLocationLabels() []string {
 	return c.opt.GetLocationLabels()
+}
+
+// GetIsolationLevel returns the isolation label for each region.
+func (c *RaftCluster) GetIsolationLevel() string {
+	return c.opt.GetIsolationLevel()
 }
 
 // GetStrictlyMatchLabel returns if the strictly label check is enabled.
@@ -1658,10 +1703,17 @@ func (c *RaftCluster) GetHotReadRegions() *statistics.StoreHotPeersInfos {
 }
 
 // GetSchedulers gets all schedulers.
-func (c *RaftCluster) GetSchedulers() map[string]*scheduleController {
+func (c *RaftCluster) GetSchedulers() []string {
 	c.RLock()
 	defer c.RUnlock()
 	return c.coordinator.getSchedulers()
+}
+
+// GetSchedulerHandlers gets all scheduler handlers.
+func (c *RaftCluster) GetSchedulerHandlers() map[string]http.Handler {
+	c.RLock()
+	defer c.RUnlock()
+	return c.coordinator.getSchedulerHandlers()
 }
 
 // AddScheduler adds a scheduler.
@@ -1683,6 +1735,13 @@ func (c *RaftCluster) PauseOrResumeScheduler(name string, t int64) error {
 	c.RLock()
 	defer c.RUnlock()
 	return c.coordinator.pauseOrResumeScheduler(name, t)
+}
+
+// IsSchedulerPaused checks if a scheduler is paused.
+func (c *RaftCluster) IsSchedulerPaused(name string) (bool, error) {
+	c.RLock()
+	defer c.RUnlock()
+	return c.coordinator.isSchedulerPaused(name)
 }
 
 // GetStoreLimiter returns the dynamic adjusting limiter
@@ -1743,6 +1802,11 @@ func (c *RaftCluster) GetClusterVersion() string {
 	return c.opt.GetClusterVersion().String()
 }
 
+// GetEtcdClient returns the current etcd client
+func (c *RaftCluster) GetEtcdClient() *clientv3.Client {
+	return c.etcdClient
+}
+
 var healthURL = "/pd/api/v1/ping"
 
 // CheckHealth checks if members are healthy.
@@ -1753,7 +1817,7 @@ func CheckHealth(client *http.Client, members []*pdpb.Member) map[uint64]*pdpb.M
 			ctx, cancel := context.WithTimeout(context.Background(), clientTimeout)
 			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s%s", cURL, healthURL), nil)
 			if err != nil {
-				log.Error("failed to new request", zap.Error(err))
+				log.Error("failed to new request", errs.ZapError(errs.ErrNewHTTPRequest, err))
 				cancel()
 				continue
 			}

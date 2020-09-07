@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2017 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 package config
 
 import (
-	"context"
 	"reflect"
 	"sync/atomic"
 	"time"
@@ -22,12 +21,10 @@ import (
 
 	"github.com/coreos/go-semver/semver"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/pd/v4/pkg/slice"
-	"github.com/pingcap/pd/v4/pkg/typeutil"
-	"github.com/pingcap/pd/v4/server/core"
-	"github.com/pingcap/pd/v4/server/kv"
-	"github.com/pingcap/pd/v4/server/schedule"
-	"github.com/pingcap/pd/v4/server/schedule/storelimit"
+	"github.com/tikv/pd/pkg/slice"
+	"github.com/tikv/pd/pkg/typeutil"
+	"github.com/tikv/pd/server/core"
+	"github.com/tikv/pd/server/schedule/storelimit"
 )
 
 // PersistOptions wraps all configurations that need to persist to storage and
@@ -121,6 +118,11 @@ func (o *PersistOptions) CASClusterVersion(old, new *semver.Version) bool {
 // GetLocationLabels returns the location labels for each region.
 func (o *PersistOptions) GetLocationLabels() []string {
 	return o.GetReplicationConfig().LocationLabels
+}
+
+// GetIsolationLevel returns the isolation label for each region.
+func (o *PersistOptions) GetIsolationLevel() string {
+	return o.GetReplicationConfig().IsolationLevel
 }
 
 // IsPlacementRulesEnabled returns if the placement rules is enabled.
@@ -233,7 +235,7 @@ func (o *PersistOptions) IsCrossTableMergeEnabled() bool {
 	return o.GetScheduleConfig().EnableCrossTableMerge
 }
 
-// GetPatrolRegionInterval returns the interval of patroling region.
+// GetPatrolRegionInterval returns the interval of patrolling region.
 func (o *PersistOptions) GetPatrolRegionInterval() time.Duration {
 	return o.GetScheduleConfig().PatrolRegionInterval.Duration
 }
@@ -413,30 +415,6 @@ func (o *PersistOptions) AddSchedulerCfg(tp string, args []string) {
 	o.SetScheduleConfig(v)
 }
 
-// RemoveSchedulerCfg removes the scheduler configurations.
-func (o *PersistOptions) RemoveSchedulerCfg(ctx context.Context, name string) error {
-	v := o.GetScheduleConfig().Clone()
-	for i, schedulerCfg := range v.Schedulers {
-		// To create a temporary scheduler is just used to get scheduler's name
-		decoder := schedule.ConfigSliceDecoder(schedulerCfg.Type, schedulerCfg.Args)
-		tmp, err := schedule.CreateScheduler(schedulerCfg.Type, schedule.NewOperatorController(ctx, nil, nil), core.NewStorage(kv.NewMemoryKV()), decoder)
-		if err != nil {
-			return err
-		}
-		if tmp.GetName() == name {
-			if IsDefaultScheduler(tmp.GetType()) {
-				schedulerCfg.Disable = true
-				v.Schedulers[i] = schedulerCfg
-			} else {
-				v.Schedulers = append(v.Schedulers[:i], v.Schedulers[i+1:]...)
-			}
-			o.SetScheduleConfig(v)
-			return nil
-		}
-	}
-	return nil
-}
-
 // SetLabelProperty sets the label property.
 func (o *PersistOptions) SetLabelProperty(typ, labelKey, labelValue string) {
 	cfg := o.GetLabelPropertyConfig().Clone()
@@ -476,13 +454,15 @@ func (o *PersistOptions) Persist(storage *core.Storage) error {
 		LabelProperty:   o.GetLabelPropertyConfig(),
 		ClusterVersion:  *o.GetClusterVersion(),
 	}
-	err := storage.SaveConfig(cfg)
-	return err
+	return storage.SaveConfig(cfg)
 }
 
 // Reload reloads the configuration from the storage.
 func (o *PersistOptions) Reload(storage *core.Storage) error {
 	cfg := &Config{}
+	// pass nil to initialize cfg to default values (all items undefined)
+	cfg.Adjust(nil)
+
 	isExist, err := storage.LoadConfig(cfg)
 	if err != nil {
 		return err

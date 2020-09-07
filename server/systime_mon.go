@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2017 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/tikv/pd/pkg/errs"
 	"go.uber.org/zap"
 )
 
@@ -31,7 +32,7 @@ func StartMonitor(ctx context.Context, now func() time.Time, systimeErrHandler f
 		select {
 		case <-tick.C:
 			if now().UnixNano() < last {
-				log.Error("system time jump backward", zap.Int64("last", last))
+				log.Error("system time jump backward", zap.Int64("last", last), errs.ZapError(errs.ErrIncorrectSystemTime))
 				systimeErrHandler()
 			}
 		case <-ctx.Done():

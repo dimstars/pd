@@ -1,4 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
+// Copyright 2019 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,13 +21,14 @@ import (
 
 	. "github.com/pingcap/check"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/pd/v4/pkg/mock/mockcluster"
-	"github.com/pingcap/pd/v4/pkg/mock/mockoption"
-	"github.com/pingcap/pd/v4/pkg/testutil"
-	"github.com/pingcap/pd/v4/server/core"
-	"github.com/pingcap/pd/v4/server/schedule/operator"
-	"github.com/pingcap/pd/v4/server/schedule/opt"
-	"github.com/pingcap/pd/v4/server/schedule/placement"
+	"github.com/tikv/pd/pkg/mock/mockcluster"
+	"github.com/tikv/pd/pkg/mock/mockoption"
+	"github.com/tikv/pd/pkg/testutil"
+	"github.com/tikv/pd/server/core"
+	"github.com/tikv/pd/server/schedule/operator"
+	"github.com/tikv/pd/server/schedule/opt"
+	"github.com/tikv/pd/server/schedule/placement"
+	"github.com/tikv/pd/server/versioninfo"
 	"go.uber.org/goleak"
 )
 
@@ -57,6 +58,7 @@ func (s *testMergeCheckerSuite) SetUpTest(c *C) {
 		opt.RejectLeader: {{Key: "reject", Value: "leader"}},
 	}
 	s.cluster = mockcluster.NewCluster(cfg)
+	s.cluster.DisableFeature(versioninfo.JointConsensus)
 	stores := map[uint64][]string{
 		1: {}, 2: {}, 3: {}, 4: {}, 5: {}, 6: {},
 		7: {"reject", "leader"},
@@ -420,6 +422,7 @@ func (s *testMergeCheckerSuite) TestCache(c *C) {
 	cfg.MaxMergeRegionKeys = 2
 	cfg.SplitMergeInterval = time.Hour
 	s.cluster = mockcluster.NewCluster(cfg)
+	s.cluster.DisableFeature(versioninfo.JointConsensus)
 	stores := map[uint64][]string{
 		1: {}, 2: {}, 3: {}, 4: {}, 5: {}, 6: {},
 	}

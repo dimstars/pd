@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2017 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,8 +21,9 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
-	"github.com/pingcap/pd/v4/pkg/slice"
-	"github.com/pingcap/pd/v4/server/schedule/storelimit"
+	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/pkg/slice"
+	"github.com/tikv/pd/server/schedule/storelimit"
 	"go.uber.org/zap"
 )
 
@@ -370,7 +371,7 @@ func (bc *BasicCluster) PreCheckPutRegion(region *RegionInfo) (*RegionInfo, erro
 		for _, item := range bc.Regions.GetOverlaps(region) {
 			if region.GetRegionEpoch().GetVersion() < item.GetRegionEpoch().GetVersion() {
 				bc.RUnlock()
-				return nil, ErrRegionIsStale(region.GetMeta(), item.GetMeta())
+				return nil, errRegionIsStale(region.GetMeta(), item.GetMeta())
 			}
 		}
 	}
@@ -380,10 +381,15 @@ func (bc *BasicCluster) PreCheckPutRegion(region *RegionInfo) (*RegionInfo, erro
 	}
 	r := region.GetRegionEpoch()
 	o := origin.GetRegionEpoch()
+
+	// TiKV reports term after v3.0
+	isTermBehind := region.GetTerm() > 0 && region.GetTerm() < origin.GetTerm()
+
 	// Region meta is stale, return an error.
-	if r.GetVersion() < o.GetVersion() || r.GetConfVer() < o.GetConfVer() {
-		return origin, ErrRegionIsStale(region.GetMeta(), origin.GetMeta())
+	if r.GetVersion() < o.GetVersion() || r.GetConfVer() < o.GetConfVer() || isTermBehind {
+		return origin, errRegionIsStale(region.GetMeta(), origin.GetMeta())
 	}
+
 	return origin, nil
 }
 
@@ -404,7 +410,7 @@ func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 func (bc *BasicCluster) CheckAndPutRegion(region *RegionInfo) []*RegionInfo {
 	origin, err := bc.PreCheckPutRegion(region)
 	if err != nil {
-		log.Debug("region is stale", zap.Error(err), zap.Stringer("origin", origin.GetMeta()))
+		log.Debug("region is stale", zap.Stringer("origin", origin.GetMeta()), errs.ZapError(err))
 		// return the state region to delete.
 		return []*RegionInfo{region}
 	}

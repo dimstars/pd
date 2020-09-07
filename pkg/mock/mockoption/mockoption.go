@@ -1,4 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
+// Copyright 2019 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/pd/v4/server/core"
-	"github.com/pingcap/pd/v4/server/schedule/storelimit"
+	"github.com/tikv/pd/server/core"
+	"github.com/tikv/pd/server/schedule/storelimit"
 )
 
 const (
@@ -74,6 +74,7 @@ type ScheduleOptions struct {
 	MaxReplicas                  int
 	LocationLabels               []string
 	StrictlyMatchLabel           bool
+	IsolationLevel               string
 	HotRegionCacheHitsThreshold  int
 	TolerantSizeRatio            float64
 	LowSpaceRatio                float64
@@ -255,6 +256,11 @@ func (mso *ScheduleOptions) GetMaxReplicas() int {
 // GetLocationLabels mocks method
 func (mso *ScheduleOptions) GetLocationLabels() []string {
 	return mso.LocationLabels
+}
+
+// GetIsolationLevel mocks method
+func (mso *ScheduleOptions) GetIsolationLevel() string {
+	return mso.IsolationLevel
 }
 
 // GetStrictlyMatchLabel mocks method

@@ -1,4 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
+// Copyright 2019 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import (
 	"crypto/tls"
 	"net/url"
 
-	"github.com/pkg/errors"
+	"github.com/tikv/pd/pkg/errs"
 	"go.etcd.io/etcd/pkg/transport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -55,7 +55,7 @@ func (s SecurityConfig) ToTLSConfig() (*tls.Config, error) {
 
 	tlsConfig, err := tlsInfo.ClientConfig()
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errs.ErrEtcdTLSConfig.Wrap(err).GenWithStackByCause()
 	}
 	return tlsConfig, nil
 }
@@ -68,7 +68,7 @@ func (s SecurityConfig) GetOneAllowedCN() (string, error) {
 	case 0:
 		return "", nil
 	default:
-		return "", errors.New("Currently only supports one CN")
+		return "", errs.ErrSecurityConfig.FastGenByArgs("only supports one CN")
 	}
 }
 
@@ -93,11 +93,11 @@ func GetClientConn(ctx context.Context, addr string, tlsCfg *tls.Config, do ...g
 	}
 	u, err := url.Parse(addr)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errs.ErrURLParse.Wrap(err).GenWithStackByCause()
 	}
 	cc, err := grpc.DialContext(ctx, u.Host, append(do, opt)...)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errs.ErrGRPCDial.Wrap(err).GenWithStackByCause()
 	}
 	return cc, nil
 }

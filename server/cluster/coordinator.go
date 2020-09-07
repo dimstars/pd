@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2016 TiKV Project Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,21 +14,26 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/pd/v4/pkg/logutil"
-	"github.com/pingcap/pd/v4/server/config"
-	"github.com/pingcap/pd/v4/server/schedule"
-	"github.com/pingcap/pd/v4/server/schedule/operator"
-	"github.com/pingcap/pd/v4/server/schedule/opt"
-	"github.com/pingcap/pd/v4/server/schedulers"
-	"github.com/pingcap/pd/v4/server/statistics"
-	"github.com/pkg/errors"
+	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/pkg/logutil"
+	"github.com/tikv/pd/server/config"
+	"github.com/tikv/pd/server/core"
+	"github.com/tikv/pd/server/kv"
+	"github.com/tikv/pd/server/schedule"
+	"github.com/tikv/pd/server/schedule/operator"
+	"github.com/tikv/pd/server/schedule/opt"
+	"github.com/tikv/pd/server/schedulers"
+	"github.com/tikv/pd/server/statistics"
 	"go.uber.org/zap"
 )
 
@@ -45,9 +50,6 @@ const (
 	// PluginUnload means action for unload plugin
 	PluginUnload = "PluginUnload"
 )
-
-// ErrNotBootstrapped is error info for cluster not bootstrapped.
-var ErrNotBootstrapped = errors.New("TiKV cluster not bootstrapped, please start TiKV first")
 
 // coordinator is used to manage all schedulers and checkers to decide if the region needs to be scheduled.
 type coordinator struct {
@@ -124,6 +126,9 @@ func (c *coordinator) patrolRegions() {
 			c.cluster.RemoveSuspectRegion(id)
 		}
 
+		// Check suspect key ranges
+		c.checkSuspectKeyRanges()
+
 		regions := c.cluster.ScanRegions(key, nil, patrolScanRegionLimit)
 		if len(regions) == 0 {
 			// Resets the scan key.
@@ -156,7 +161,34 @@ func (c *coordinator) patrolRegions() {
 	}
 }
 
-// drivePushOperator is used to push the unfinished operator to the excutor.
+// checkSuspectKeyRanges would pop one suspect key range group
+// The regions of new version key range and old version key range would be placed into
+// the suspect regions map
+func (c *coordinator) checkSuspectKeyRanges() {
+	keyRange, success := c.cluster.PopOneSuspectKeyRange()
+	if !success {
+		return
+	}
+	limit := 1024
+	regions := c.cluster.ScanRegions(keyRange[0], keyRange[1], limit)
+	if len(regions) == 0 {
+		return
+	}
+	regionIDList := make([]uint64, 0, len(regions))
+	for _, region := range regions {
+		regionIDList = append(regionIDList, region.GetID())
+	}
+
+	// if the last region's end key is smaller the keyRange[1] which means there existed the remaining regions between
+	// keyRange[0] and keyRange[1] after scan regions, so we put the end key and keyRange[1] into Suspect KeyRanges
+	lastRegion := regions[len(regions)-1]
+	if lastRegion.GetEndKey() != nil && bytes.Compare(lastRegion.GetEndKey(), keyRange[1]) < 0 {
+		c.cluster.AddSuspectKeyRange(lastRegion.GetEndKey(), keyRange[1])
+	}
+	c.cluster.AddSuspectRegions(regionIDList...)
+}
+
+// drivePushOperator is used to push the unfinished operator to the executor.
 func (c *coordinator) drivePushOperator() {
 	defer logutil.LogPanic()
 
@@ -199,13 +231,19 @@ func (c *coordinator) run() {
 	)
 	for i := 0; i < maxLoadConfigRetries; i++ {
 		scheduleNames, configs, err = c.cluster.storage.LoadAllScheduleConfig()
+		select {
+		case <-c.ctx.Done():
+			log.Info("coordinator stops running")
+			return
+		default:
+		}
 		if err == nil {
 			break
 		}
-		log.Error("cannot load schedulers' config", zap.Int("retry-times", i), zap.Error(err))
+		log.Error("cannot load schedulers' config", zap.Int("retry-times", i), errs.ZapError(err))
 	}
 	if err != nil {
-		log.Fatal("cannot load schedulers' config", zap.Error(err))
+		log.Fatal("cannot load schedulers' config", errs.ZapError(err))
 	}
 
 	scheduleCfg := c.cluster.opt.GetScheduleConfig().Clone()
@@ -221,7 +259,7 @@ func (c *coordinator) run() {
 			}
 		}
 		if len(cfg.Type) == 0 {
-			log.Error("the scheduler type not found", zap.String("scheduler-name", name))
+			log.Error("the scheduler type not found", zap.String("scheduler-name", name), errs.ZapError(errs.ErrSchedulerNotFound))
 			continue
 		}
 		if cfg.Disable {
@@ -230,12 +268,12 @@ func (c *coordinator) run() {
 		}
 		s, err := schedule.CreateScheduler(cfg.Type, c.opController, c.cluster.storage, schedule.ConfigJSONDecoder([]byte(data)))
 		if err != nil {
-			log.Error("can not create scheduler with independent configuration", zap.String("scheduler-name", name), zap.Error(err))
+			log.Error("can not create scheduler with independent configuration", zap.String("scheduler-name", name), errs.ZapError(err))
 			continue
 		}
 		log.Info("create scheduler with independent configuration", zap.String("scheduler-name", s.GetName()))
 		if err = c.addScheduler(s); err != nil {
-			log.Error("can not add scheduler with independent configuration", zap.String("scheduler-name", s.GetName()), zap.Error(err))
+			log.Error("can not add scheduler with independent configuration", zap.String("scheduler-name", s.GetName()), errs.ZapError(err))
 		}
 	}
 
@@ -251,13 +289,13 @@ func (c *coordinator) run() {
 
 		s, err := schedule.CreateScheduler(schedulerCfg.Type, c.opController, c.cluster.storage, schedule.ConfigSliceDecoder(schedulerCfg.Type, schedulerCfg.Args))
 		if err != nil {
-			log.Error("can not create scheduler", zap.String("scheduler-type", schedulerCfg.Type), zap.Error(err))
+			log.Error("can not create scheduler", zap.String("scheduler-type", schedulerCfg.Type), errs.ZapError(err))
 			continue
 		}
 
 		log.Info("create scheduler", zap.String("scheduler-name", s.GetName()))
-		if err = c.addScheduler(s, schedulerCfg.Args...); err != nil && err != schedulers.ErrSchedulerExisted {
-			log.Error("can not add scheduler", zap.String("scheduler-name", s.GetName()), zap.Error(err))
+		if err = c.addScheduler(s, schedulerCfg.Args...); err != nil && !errors.ErrorEqual(err, errs.ErrSchedulerExisted.FastGenByArgs()) {
+			log.Error("can not add scheduler", zap.String("scheduler-name", s.GetName()), errs.ZapError(err))
 		} else {
 			// Only records the valid scheduler config.
 			scheduleCfg.Schedulers[k] = schedulerCfg
@@ -269,7 +307,7 @@ func (c *coordinator) run() {
 	scheduleCfg.Schedulers = scheduleCfg.Schedulers[:k]
 	c.cluster.opt.SetScheduleConfig(scheduleCfg)
 	if err := c.cluster.opt.Persist(c.cluster.storage); err != nil {
-		log.Error("cannot persist schedule config", zap.Error(err))
+		log.Error("cannot persist schedule config", errs.ZapError(err))
 	}
 
 	c.wg.Add(2)
@@ -284,26 +322,26 @@ func (c *coordinator) LoadPlugin(pluginPath string, ch chan string) {
 	// get func: SchedulerType from plugin
 	SchedulerType, err := c.pluginInterface.GetFunction(pluginPath, "SchedulerType")
 	if err != nil {
-		log.Error("GetFunction SchedulerType error", zap.Error(err))
+		log.Error("GetFunction SchedulerType error", errs.ZapError(err))
 		return
 	}
 	schedulerType := SchedulerType.(func() string)
 	// get func: SchedulerArgs from plugin
 	SchedulerArgs, err := c.pluginInterface.GetFunction(pluginPath, "SchedulerArgs")
 	if err != nil {
-		log.Error("GetFunction SchedulerArgs error", zap.Error(err))
+		log.Error("GetFunction SchedulerArgs error", errs.ZapError(err))
 		return
 	}
 	schedulerArgs := SchedulerArgs.(func() []string)
 	// create and add user scheduler
 	s, err := schedule.CreateScheduler(schedulerType(), c.opController, c.cluster.storage, schedule.ConfigSliceDecoder(schedulerType(), schedulerArgs()))
 	if err != nil {
-		log.Error("can not create scheduler", zap.String("scheduler-type", schedulerType()), zap.Error(err))
+		log.Error("can not create scheduler", zap.String("scheduler-type", schedulerType()), errs.ZapError(err))
 		return
 	}
 	log.Info("create scheduler", zap.String("scheduler-name", s.GetName()))
 	if err = c.addScheduler(s); err != nil {
-		log.Error("can't add scheduler", zap.String("scheduler-name", s.GetName()), zap.Error(err))
+		log.Error("can't add scheduler", zap.String("scheduler-name", s.GetName()), errs.ZapError(err))
 		return
 	}
 
@@ -321,7 +359,7 @@ func (c *coordinator) waitPluginUnload(pluginPath, schedulerName string, ch chan
 			if action == PluginUnload {
 				err := c.removeScheduler(schedulerName)
 				if err != nil {
-					log.Error("can not remove scheduler", zap.String("scheduler-name", schedulerName), zap.Error(err))
+					log.Error("can not remove scheduler", zap.String("scheduler-name", schedulerName), errs.ZapError(err))
 				} else {
 					log.Info("unload plugin", zap.String("plugin", pluginPath))
 					return
@@ -375,10 +413,24 @@ func (c *coordinator) getHotReadRegions() *statistics.StoreHotPeersInfos {
 	return nil
 }
 
-func (c *coordinator) getSchedulers() map[string]*scheduleController {
+func (c *coordinator) getSchedulers() []string {
 	c.RLock()
 	defer c.RUnlock()
-	return c.schedulers
+	names := make([]string, 0, len(c.schedulers))
+	for name := range c.schedulers {
+		names = append(names, name)
+	}
+	return names
+}
+
+func (c *coordinator) getSchedulerHandlers() map[string]http.Handler {
+	c.RLock()
+	defer c.RUnlock()
+	handlers := make(map[string]http.Handler, len(c.schedulers))
+	for name, scheduler := range c.schedulers {
+		handlers[name] = scheduler.Scheduler
+	}
+	return handlers
 }
 
 func (c *coordinator) collectSchedulerMetrics() {
@@ -401,12 +453,13 @@ func (c *coordinator) resetSchedulerMetrics() {
 
 func (c *coordinator) collectHotSpotMetrics() {
 	c.RLock()
-	defer c.RUnlock()
 	// Collects hot write region metrics.
 	s, ok := c.schedulers[schedulers.HotRegionName]
 	if !ok {
+		c.RUnlock()
 		return
 	}
+	c.RUnlock()
 	stores := c.cluster.GetStores()
 	status := s.Scheduler.(hasHotStatus).GetHotWriteStatus()
 	pendings := s.Scheduler.(hasHotStatus).GetWritePendingInfluence()
@@ -481,7 +534,7 @@ func (c *coordinator) addScheduler(scheduler schedule.Scheduler, args ...string)
 	defer c.Unlock()
 
 	if _, ok := c.schedulers[scheduler.GetName()]; ok {
-		return schedulers.ErrSchedulerExisted
+		return errs.ErrSchedulerExisted.FastGenByArgs()
 	}
 
 	s := newScheduleController(c, scheduler)
@@ -500,11 +553,11 @@ func (c *coordinator) removeScheduler(name string) error {
 	c.Lock()
 	defer c.Unlock()
 	if c.cluster == nil {
-		return ErrNotBootstrapped
+		return errs.ErrNotBootstrapped.FastGenByArgs()
 	}
 	s, ok := c.schedulers[name]
 	if !ok {
-		return schedulers.ErrSchedulerNotFound
+		return errs.ErrSchedulerNotFound.FastGenByArgs()
 	}
 
 	s.Stop()
@@ -513,30 +566,59 @@ func (c *coordinator) removeScheduler(name string) error {
 
 	var err error
 	opt := c.cluster.opt
-	if err = opt.RemoveSchedulerCfg(s.Ctx(), name); err != nil {
-		log.Error("can not remove scheduler", zap.String("scheduler-name", name), zap.Error(err))
-	} else if err = opt.Persist(c.cluster.storage); err != nil {
-		log.Error("the option can not persist scheduler config", zap.Error(err))
-	} else {
-		err = c.cluster.storage.RemoveScheduleConfig(name)
+
+	if err = c.removeOptScheduler(opt, name); err != nil {
+		log.Error("can not remove scheduler", zap.String("scheduler-name", name), errs.ZapError(err))
+		return err
+	}
+
+	if err = opt.Persist(c.cluster.storage); err != nil {
+		log.Error("the option can not persist scheduler config", errs.ZapError(err))
+		return err
+	}
+
+	if err = c.cluster.storage.RemoveScheduleConfig(name); err != nil {
+		log.Error("can not remove the scheduler config", errs.ZapError(err))
+		return err
+	}
+
+	return nil
+}
+
+func (c *coordinator) removeOptScheduler(o *config.PersistOptions, name string) error {
+	v := o.GetScheduleConfig().Clone()
+	for i, schedulerCfg := range v.Schedulers {
+		// To create a temporary scheduler is just used to get scheduler's name
+		decoder := schedule.ConfigSliceDecoder(schedulerCfg.Type, schedulerCfg.Args)
+		tmp, err := schedule.CreateScheduler(schedulerCfg.Type, schedule.NewOperatorController(c.ctx, nil, nil), core.NewStorage(kv.NewMemoryKV()), decoder)
 		if err != nil {
-			log.Error("can not remove the scheduler config", zap.Error(err))
+			return err
+		}
+		if tmp.GetName() == name {
+			if config.IsDefaultScheduler(tmp.GetType()) {
+				schedulerCfg.Disable = true
+				v.Schedulers[i] = schedulerCfg
+			} else {
+				v.Schedulers = append(v.Schedulers[:i], v.Schedulers[i+1:]...)
+			}
+			o.SetScheduleConfig(v)
+			return nil
 		}
 	}
-	return err
+	return nil
 }
 
 func (c *coordinator) pauseOrResumeScheduler(name string, t int64) error {
 	c.Lock()
 	defer c.Unlock()
 	if c.cluster == nil {
-		return ErrNotBootstrapped
+		return errs.ErrNotBootstrapped.FastGenByArgs()
 	}
 	s := make([]*scheduleController, 0)
 	if name != "all" {
 		sc, ok := c.schedulers[name]
 		if !ok {
-			return schedulers.ErrSchedulerNotFound
+			return errs.ErrSchedulerNotFound.FastGenByArgs()
 		}
 		s = append(s, sc)
 	} else {
@@ -553,6 +635,19 @@ func (c *coordinator) pauseOrResumeScheduler(name string, t int64) error {
 		atomic.StoreInt64(&sc.delayUntil, delayUntil)
 	}
 	return err
+}
+
+func (c *coordinator) isSchedulerPaused(name string) (bool, error) {
+	c.RLock()
+	defer c.RUnlock()
+	if c.cluster == nil {
+		return false, errs.ErrNotBootstrapped.FastGenByArgs()
+	}
+	s, ok := c.schedulers[name]
+	if !ok {
+		return false, errs.ErrSchedulerNotFound.FastGenByArgs()
+	}
+	return s.IsPaused(), nil
 }
 
 func (c *coordinator) runScheduler(s *scheduleController) {
@@ -578,7 +673,7 @@ func (c *coordinator) runScheduler(s *scheduleController) {
 		case <-s.Ctx().Done():
 			log.Info("scheduler has been stopped",
 				zap.String("scheduler-name", s.GetName()),
-				zap.Error(s.Ctx().Err()))
+				errs.ZapError(s.Ctx().Err()))
 			return
 		}
 	}
@@ -638,7 +733,7 @@ func (s *scheduleController) AllowSchedule() bool {
 	return s.Scheduler.IsScheduleAllowed(s.cluster) && !s.IsPaused()
 }
 
-// isPaused returns if a schedueler is paused.
+// isPaused returns if a scheduler is paused.
 func (s *scheduleController) IsPaused() bool {
 	delayUntil := atomic.LoadInt64(&s.delayUntil)
 	return time.Now().Unix() < delayUntil
