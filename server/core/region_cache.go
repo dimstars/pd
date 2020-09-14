@@ -24,6 +24,7 @@ type regionQueue struct {
 	start *regionQueueNode
 	end   *regionQueueNode
 	len   int
+	nodes map[uint64]*regionQueueNode
 }
 
 func newRegionQueue() *regionQueue {
@@ -31,16 +32,31 @@ func newRegionQueue() *regionQueue {
 		start: nil,
 		end:   nil,
 		len:   0,
+		nodes: make(map[uint64]*regionQueueNode),
 	}
+}
+
+// getNode gets the regionQueueNode which has the region with regionID.
+func (queue *regionQueue) getNode(regionID uint64) *regionQueueNode {
+	if node, ok := queue.nodes[regionID]; ok {
+		return node
+	}
+	return nil
+}
+
+// getRegion gets a RegionInfo from regionCache.
+func (queue *regionQueue) getRegion(regionID uint64) *RegionInfo {
+	if node, ok := queue.nodes[regionID]; ok {
+		return node.region
+	}
+	return nil
 }
 
 // getRegions gets all RegionInfo from regionQueue.
 func (queue *regionQueue) getRegions() []*RegionInfo {
 	var regions []*RegionInfo
-	temp := queue.start
-	for temp != nil {
-		regions = append(regions, temp.region)
-		temp = temp.next
+	for _, node := range queue.nodes {
+		regions = append(regions, node.region)
 	}
 	return regions
 }
@@ -58,6 +74,7 @@ func (queue *regionQueue) push(region *RegionInfo) *regionQueueNode {
 		}
 		queue.len++
 		queue.end = queue.start
+		queue.nodes[region.GetID()] = queue.start
 		return queue.start
 	}
 	queue.end.next = &regionQueueNode{
@@ -67,6 +84,7 @@ func (queue *regionQueue) push(region *RegionInfo) *regionQueueNode {
 	}
 	queue.len++
 	queue.end = queue.end.next
+	queue.nodes[region.GetID()] = queue.end
 	return queue.end
 }
 
@@ -81,11 +99,13 @@ func (queue *regionQueue) pop() *RegionInfo {
 		queue.start.pre = nil
 	}
 	queue.len--
+	delete(queue.nodes, region.GetID())
 	return region
 }
 
 // removeNode deletes the regionQueueNode in regionQueue.
-func (queue *regionQueue) removeNode(node *regionQueueNode) {
+func (queue *regionQueue) remove(regionID uint64) {
+	node := queue.getNode(regionID)
 	if node == nil {
 		return
 	}
@@ -100,61 +120,91 @@ func (queue *regionQueue) removeNode(node *regionQueueNode) {
 		queue.end = node.pre
 	}
 	queue.len--
+	delete(queue.nodes, regionID)
 }
 
 type regionCache struct {
-	regionQueue  *regionQueue
-	queueNodeMap map[uint64]*regionQueueNode
+	regions      *regionQueue
+	leaders      *regionQueue
+	followers    *regionQueue
+	learners     *regionQueue
+	pendingPeers *regionQueue
 }
 
 func newRegionCache() *regionCache {
 	return &regionCache{
-		regionQueue:  newRegionQueue(),
-		queueNodeMap: make(map[uint64]*regionQueueNode),
+		regions:      newRegionQueue(),
+		leaders:      newRegionQueue(),
+		followers:    newRegionQueue(),
+		learners:     newRegionQueue(),
+		pendingPeers: newRegionQueue(),
 	}
 }
 
 func (cache *regionCache) length() int {
-	return cache.regionQueue.len
+	return cache.regions.len
 }
 
-// getNode gets the regionQueueNode which has the region with regionID.
-func (cache *regionCache) getNode(regionID uint64) *regionQueueNode {
-	if node, ok := cache.queueNodeMap[regionID]; ok {
-		return node
-	}
-	return nil
+// getRegions get a RegionInfo from regionCache.
+func (cache *regionCache) getRegion(regionID uint64) *RegionInfo {
+	return cache.regions.getRegion(regionID)
 }
 
 // getRegions gets all RegionInfo from regionCache.
 func (cache *regionCache) getRegions() []*RegionInfo {
-	return cache.regionQueue.getRegions()
+	return cache.regions.getRegions()
 }
 
 // update updates the RegionInfo or add it into regionCache.
 func (cache *regionCache) update(region *RegionInfo) {
-	if node := cache.getNode(region.GetID()); node != nil {
-		node.region = region
+	if region == nil {
 		return
 	}
-	node := cache.regionQueue.push(region)
-	if node != nil {
-		cache.queueNodeMap[region.GetID()] = node
+	if cache.getRegion(region.GetID()) != nil {
+		cache.remove(region.GetID())
+	}
+	cache.regions.push(region)
+	if region.GetPendingPeers() != nil {
+		cache.pendingPeers.push(region)
+	}
+	if region.GetFollowers() != nil {
+		cache.followers.push(region)
+	}
+	if region.GetLeader() != nil {
+		cache.leaders.push(region)
+	}
+	if region.GetLearners() != nil {
+		cache.learners.push(region)
 	}
 }
 
 // remove deletes the region in regionCache.
-func (cache *regionCache) remove(region *RegionInfo) {
-	if node, ok := cache.queueNodeMap[region.GetID()]; ok {
-		cache.regionQueue.removeNode(node)
-		delete(cache.queueNodeMap, region.GetID())
+func (cache *regionCache) remove(regionID uint64) {
+	if cache.getRegion(regionID) != nil {
+		cache.regions.remove(regionID)
+		cache.pendingPeers.remove(regionID)
+		cache.followers.remove(regionID)
+		cache.leaders.remove(regionID)
+		cache.learners.remove(regionID)
+	}
+}
+
+func (cache *regionCache) stop(regionID uint64) {
+	if cache.getRegion(regionID) != nil {
+		cache.pendingPeers.remove(regionID)
+		cache.followers.remove(regionID)
+		cache.leaders.remove(regionID)
+		cache.learners.remove(regionID)
 	}
 }
 
 // pop deletes the oldest region and return it.
 func (cache *regionCache) pop() *RegionInfo {
-	if region := cache.regionQueue.pop(); region != nil {
-		delete(cache.queueNodeMap, region.GetID())
+	if region := cache.regions.pop(); region != nil {
+		cache.pendingPeers.remove(region.GetID())
+		cache.followers.remove(region.GetID())
+		cache.leaders.remove(region.GetID())
+		cache.learners.remove(region.GetID())
 		return region
 	}
 	return nil
@@ -166,7 +216,7 @@ func (cache *regionCache) randomRegion(storeID uint64, ranges []KeyRange, n int,
 		ranges = []KeyRange{NewKeyRange("", "")}
 	}
 
-	for _, node := range cache.queueNodeMap {
+	for _, node := range cache.pendingPeers.nodes {
 		if !involved(node.region, ranges) {
 			continue
 		}
@@ -176,7 +226,7 @@ func (cache *regionCache) randomRegion(storeID uint64, ranges []KeyRange, n int,
 			}
 		}
 	}
-	for _, node := range cache.queueNodeMap {
+	for _, node := range cache.followers.nodes {
 		if !involved(node.region, ranges) {
 			continue
 		}
@@ -186,7 +236,7 @@ func (cache *regionCache) randomRegion(storeID uint64, ranges []KeyRange, n int,
 			}
 		}
 	}
-	for _, node := range cache.queueNodeMap {
+	for _, node := range cache.leaders.nodes {
 		if !involved(node.region, ranges) {
 			continue
 		}
@@ -195,7 +245,7 @@ func (cache *regionCache) randomRegion(storeID uint64, ranges []KeyRange, n int,
 			return node.region
 		}
 	}
-	for _, node := range cache.queueNodeMap {
+	for _, node := range cache.learners.nodes {
 		if !involved(node.region, ranges) {
 			continue
 		}

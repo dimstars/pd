@@ -57,8 +57,8 @@ func NewBasicCluster() *BasicCluster {
 func NewSelectConfig() *SelectConfig {
 	return &SelectConfig{
 		NewRegionFirst: true,
-		NewProbability: 1.0,
-		MaxRegionCount: 100,
+		NewProbability: 0.0,
+		MaxRegionCount: 1000,
 	}
 }
 
@@ -202,9 +202,6 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPend
 		rand.Seed(time.Now().UnixNano())
 		p := float64(rand.Intn(100)+1) / 100.0
 		if p <= bc.SelectConf.NewProbability {
-			/*regions := bc.NewRegions.randomRegion(storeID, ranges, randomRegionMaxRetry, optPending, optOther, optAll)
-			bc.RUnlock()
-			return bc.selectRegion(regions, optOther, optAll)*/
 			region := bc.NewRegions.randomRegion(storeID, ranges, randomRegionMaxRetry, optPending, optOther, optAll)
 			bc.RUnlock()
 			return region
@@ -218,18 +215,18 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPend
 func (bc *BasicCluster) RemoveNewRegion(regionID uint64) {
 	bc.Lock()
 	if bc.SelectConf.NewRegionFirst {
-		if node := bc.NewRegions.getNode(regionID); node != nil {
-			/*for i, region := range bc.NewRegions.getRegions() {
-				log.Info("my get all regions id",
-					zap.Int("num", i),
-					zap.Uint64("region-id", region.GetID()))
-			}*/
-			bc.NewRegions.remove(node.region)
-			log.Info("my balance_region finish new",
-				zap.Uint64("region-id", regionID))
-		} else {
-			log.Info("my balance_region finish old",
-				zap.Uint64("region-id", regionID))
+		if region := bc.NewRegions.getRegion(regionID); region != nil {
+			bc.NewRegions.remove(region.GetID())
+		}
+	}
+	bc.Unlock()
+}
+
+func (bc *BasicCluster) StopNewRegion(regionID uint64) {
+	bc.Lock()
+	if bc.SelectConf.NewRegionFirst {
+		if region := bc.NewRegions.getRegion(regionID); region != nil {
+			bc.NewRegions.stop(region.GetID())
 		}
 	}
 	bc.Unlock()
@@ -397,7 +394,7 @@ func (bc *BasicCluster) PreCheckPutRegion(region *RegionInfo) (*RegionInfo, erro
 func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	bc.Lock()
 	defer bc.Unlock()
-	if bc.SelectConf.NewRegionFirst && (bc.Regions.GetRegion(region.GetID()) == nil || bc.NewRegions.getNode(region.GetID()) != nil){
+	if bc.SelectConf.NewRegionFirst && (bc.Regions.GetRegion(region.GetID()) == nil || bc.NewRegions.getRegion(region.GetID()) != nil){
 		bc.NewRegions.update(region)
 		if bc.NewRegions.length() > bc.SelectConf.MaxRegionCount {
 			bc.NewRegions.pop()
@@ -422,7 +419,7 @@ func (bc *BasicCluster) RemoveRegion(region *RegionInfo) {
 	bc.Lock()
 	defer bc.Unlock()
 	if bc.SelectConf.NewRegionFirst {
-		bc.NewRegions.remove(region)
+		bc.NewRegions.remove(region.GetID())
 	}
 	bc.Regions.RemoveRegion(region)
 }
@@ -461,6 +458,7 @@ type RegionSetInformer interface {
 	GetRegionCount() int
 	RandNewRegion(storeID uint64, ranges []KeyRange, optPending RegionOption, optOther RegionOption, optAll RegionOption) *RegionInfo
 	RemoveNewRegion(regionID uint64)
+	StopNewRegion(regionID uint64)
 	GetNewRegions() []*RegionInfo
 	RandFollowerRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo
 	RandLeaderRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo

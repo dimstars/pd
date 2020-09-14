@@ -16,18 +16,10 @@ package schedulers
 import (
 	"context"
 	"fmt"
-	. "github.com/pingcap/check"
-	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/pd/v4/pkg/mock/mockcluster"
-	"github.com/pingcap/pd/v4/pkg/mock/mockhbstream"
-	"github.com/pingcap/pd/v4/pkg/mock/mockoption"
-	"github.com/pingcap/pd/v4/pkg/testutil"
-	"github.com/pingcap/pd/v4/server/core"
-	"github.com/pingcap/pd/v4/server/kv"
-	"github.com/pingcap/pd/v4/server/schedule"
-	"github.com/pingcap/pd/v4/server/schedule/operator"
 	"math"
 	"math/rand"
+	. "github.com/pingcap/check"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/pd/pkg/mock/mockcluster"
 	"github.com/tikv/pd/pkg/mock/mockhbstream"
 	"github.com/tikv/pd/pkg/mock/mockoption"
@@ -1182,41 +1174,31 @@ func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
 	// For each cycle, place a region into the NewRegions set (representing that it is new).
 	// Call the Schedule function and verify that this region is selected.
 	// This region is then removed from the NewRegions set before next cycle.
-	for i := 100; i < 110; i++ {
+	for i := 100; i < 200; i++ {
 		region := tc.Regions.GetRegion(uint64(i*4 + 4))
 		c.Assert(region, NotNil)
-		region = tc.NewRegions.getRegion(uint64(i*4 + 4))
-		c.Assert(region, IsNil)
+		tc.RemoveRegion(region)
 		tc.PutRegion(region)
 	}
-	for i := 100; i < 110; i++ {
+	for i := 0; i < 100; i++ {
 		id := hb.Schedule(tc)[0].RegionID()
 		c.Assert(id, GreaterEqual, uint64(100*4+4))
-		c.Assert(id, LessEqual, uint64(110*4+4))
+		c.Assert(id, LessEqual, uint64(200*4+4))
 	}
 
 	// The maximum number of new regions is 1000.
 	for i := 0; i < 1000; i++ {
 		region := tc.Regions.GetRegion(uint64(i*4 + 4))
 		c.Assert(region, NotNil)
+		tc.RemoveRegion(region)
 		tc.PutRegion(region)
 	}
 	c.Assert(len(tc.GetNewRegions()), Equals, 1000)
 	for i := 1000; i < 1010; i++ {
 		region := tc.Regions.GetRegion(uint64(i*4 + 4))
 		c.Assert(region, NotNil)
+		tc.RemoveRegion(region)
 		tc.PutRegion(region)
 		c.Assert(len(tc.GetNewRegions()), Equals, 1000)
 	}
-
-	//c.Assert(tc.RandNewRegion(1, []core.KeyRange{core.NewKeyRange("", "")}), NotNil)
-	// Set the probability to 0.
-	// NewRegions won't be used.
-	tc.SetSelectConfig(
-		&core.SelectConfig{
-			NewRegionFirst: true,
-			NewProbability: 0.0,
-			MaxRegionCount: 1000,
-		})
-	//c.Assert(tc.RandNewRegion(1, []core.KeyRange{core.NewKeyRange("", "")}), IsNil)
 }

@@ -535,6 +535,19 @@ func (oc *OperatorController) buryOperator(op *operator.Operator, extraFileds ..
 	case operator.SUCCESS:
 		// If successful, remove this region from NewRegions.
 		if op.Kind() == operator.OpRegion || op.Kind() == operator.OpRegion | operator.OpLeader{
+			isNew := false
+			for _, region := range oc.cluster.GetNewRegions() {
+				if region.GetID() == op.RegionID() {
+					log.Info("my balance_region finish new",
+						zap.Uint64("region-id", op.RegionID()))
+					isNew = true
+					break
+				}
+			}
+			if !isNew {
+				log.Info("my balance_region finish old",
+					zap.Uint64("region-id", op.RegionID()))
+			}
 			oc.cluster.RemoveNewRegion(op.RegionID())
 		}
 		log.Info("operator finish",
@@ -562,6 +575,22 @@ func (oc *OperatorController) buryOperator(op *operator.Operator, extraFileds ..
 			zap.Reflect("operator", op))
 		operatorCounter.WithLabelValues(op.Desc(), "timeout").Inc()
 	case operator.CANCELED:
+		if op.Kind() == operator.OpRegion || op.Kind() == operator.OpRegion | operator.OpLeader{
+			isNew := false
+			for _, region := range oc.cluster.GetNewRegions() {
+				if region.GetID() == op.RegionID() {
+					log.Info("my balance canceled new",
+						zap.Uint64("region-id", op.RegionID()))
+					isNew = true
+					break
+				}
+			}
+			if !isNew {
+				log.Info("my balance canceled old",
+					zap.Uint64("region-id", op.RegionID()))
+			}
+			oc.cluster.StopNewRegion(op.RegionID())
+		}
 		fileds := []zap.Field{
 			zap.Uint64("region-id", op.RegionID()),
 			zap.Duration("takes", op.RunningTime()),
