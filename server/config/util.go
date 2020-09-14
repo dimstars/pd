@@ -75,3 +75,14 @@ func IsSchedulerRegistered(name string) bool {
 	_, ok := schedulerMap[name]
 	return ok
 }
+
+// NewTestOptions creates default options for testing.
+func NewTestOptions() *PersistOptions {
+	// register default schedulers in case config check fail.
+	for _, d := range DefaultSchedulers {
+		RegisterScheduler(d.Type)
+	}
+	c := NewConfig()
+	c.Adjust(nil)
+	return NewPersistOptions(c)
+}
