@@ -204,11 +204,22 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) []*operator.Opera
 					log.Info("my balance_region return old region: learner")
 				}
 				log.Info("my balance_region select region", zap.Uint64("region-id", op.RegionID()))
-				/*for i, region := range cluster.GetNewRegions() {
-					log.Info("my get all regions id",
-						zap.Int("num", i),
-						zap.Uint64("region-id", region.GetID()))
-				}*/
+				if count > 0 {
+					isNew := false
+					for _, r := range cluster.GetNewRegions() {
+						if r.GetID() == op.RegionID() {
+							log.Info("my balance_region normal select new",
+								zap.Uint64("region-id", op.RegionID()))
+							isNew = true
+							break
+						}
+					}
+					if !isNew {
+						log.Info("my balance_region normal select old",
+							zap.Uint64("region-id", op.RegionID()))
+					}
+				}
+				cluster.StopNewRegion(op.RegionID())
 				return []*operator.Operator{op}
 			}
 		}

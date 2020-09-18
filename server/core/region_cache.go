@@ -265,7 +265,7 @@ func involved(region *RegionInfo, ranges []KeyRange) bool {
 		if len(startKey) > 0 && len(endKey) > 0 && bytes.Compare(startKey, endKey) > 0 {
 			continue
 		}
-		if (len(startKey) == 0 || (len(region.GetStartKey()) > 0 && bytes.Compare(region.GetStartKey(), startKey) >= 0 )) && (len(endKey) == 0 || (len(region.GetEndKey()) > 0 && bytes.Compare(region.GetEndKey(), endKey) <= 0)) {
+		if (len(startKey) == 0 || (len(region.GetStartKey()) > 0 && bytes.Compare(region.GetStartKey(), startKey) >= 0)) && (len(endKey) == 0 || (len(region.GetEndKey()) > 0 && bytes.Compare(region.GetEndKey(), endKey) <= 0)) {
 			return true
 		}
 	}

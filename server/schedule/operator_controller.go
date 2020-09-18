@@ -272,11 +272,17 @@ func (oc *OperatorController) AddWaitingOperator(ops ...*operator.Operator) int 
 			isMerge = true
 		}
 		if !oc.checkAddOperator(op) {
+			log.Info("my AddWaitingOperator cancel operator",
+				zap.Uint64("region-id", op.RegionID()),
+				zap.Reflect("operator", op))
 			_ = op.Cancel()
 			oc.buryOperator(op)
 			if isMerge {
 				// Merge operation have two operators, cancel them all
 				next := ops[i+1]
+				log.Info("my AddWaitingOperator cancel operator next",
+					zap.Uint64("region-id", next.RegionID()),
+					zap.Reflect("operator", next))
 				_ = next.Cancel()
 				oc.buryOperator(next)
 			}
@@ -366,6 +372,8 @@ func (oc *OperatorController) checkAddOperator(ops ...*operator.Operator) bool {
 	for _, op := range ops {
 		region := oc.cluster.GetRegion(op.RegionID())
 		if region == nil {
+			log.Info("my checkAddOperator region not found, cancel add operator",
+				zap.Uint64("region-id", op.RegionID()))
 			log.Debug("region not found, cancel add operator",
 				zap.Uint64("region-id", op.RegionID()))
 			operatorWaitCounter.WithLabelValues(op.Desc(), "add_canceled").Inc()
@@ -373,6 +381,10 @@ func (oc *OperatorController) checkAddOperator(ops ...*operator.Operator) bool {
 		}
 		if region.GetRegionEpoch().GetVersion() != op.RegionEpoch().GetVersion() ||
 			region.GetRegionEpoch().GetConfVer() != op.RegionEpoch().GetConfVer() {
+			log.Info("my checkAddOperator region epoch not match, cancel add operator",
+				zap.Uint64("region-id", op.RegionID()),
+				zap.Reflect("old", region.GetRegionEpoch()),
+				zap.Reflect("new", op.RegionEpoch()))
 			log.Debug("region epoch not match, cancel add operator",
 				zap.Uint64("region-id", op.RegionID()),
 				zap.Reflect("old", region.GetRegionEpoch()),
@@ -381,6 +393,9 @@ func (oc *OperatorController) checkAddOperator(ops ...*operator.Operator) bool {
 			return false
 		}
 		if old := oc.operators[op.RegionID()]; old != nil && !isHigherPriorityOperator(op, old) {
+			log.Info("my checkAddOperator already have operator, cancel add operator",
+				zap.Uint64("region-id", op.RegionID()),
+				zap.Reflect("old", old))
 			log.Debug("already have operator, cancel add operator",
 				zap.Uint64("region-id", op.RegionID()),
 				zap.Reflect("old", old))
@@ -388,6 +403,10 @@ func (oc *OperatorController) checkAddOperator(ops ...*operator.Operator) bool {
 			return false
 		}
 		if op.Status() != operator.CREATED {
+			log.Info("my checkAddOperator trying to add operator with unexpected status, cancel add operator",
+				zap.Uint64("region-id", op.RegionID()),
+				zap.String("status", operator.OpStatusToString(op.Status())),
+				zap.Reflect("operator", op), errs.ZapError(errs.ErrUnexpectedOperatorStatus))
 			log.Error("trying to add operator with unexpected status",
 				zap.Uint64("region-id", op.RegionID()),
 				zap.String("status", operator.OpStatusToString(op.Status())),
@@ -399,6 +418,10 @@ func (oc *OperatorController) checkAddOperator(ops ...*operator.Operator) bool {
 			return false
 		}
 		if oc.wopStatus.ops[op.Desc()] >= oc.cluster.GetOpts().GetSchedulerMaxWaitingOperator() {
+			log.Info("my checkAddOperator exceed_max return false, cancel add operator",
+				zap.Uint64("waiting", oc.wopStatus.ops[op.Desc()]),
+				zap.String("desc", op.Desc()), zap.Uint64("max",
+					oc.cluster.GetOpts().GetSchedulerMaxWaitingOperator()))
 			log.Debug("exceed_max return false", zap.Uint64("waiting", oc.wopStatus.ops[op.Desc()]), zap.String("desc", op.Desc()), zap.Uint64("max", oc.cluster.GetOpts().GetSchedulerMaxWaitingOperator()))
 			operatorWaitCounter.WithLabelValues(op.Desc(), "exceed_max").Inc()
 			return false
@@ -408,6 +431,8 @@ func (oc *OperatorController) checkAddOperator(ops ...*operator.Operator) bool {
 	for _, op := range ops {
 		if op.CheckExpired() {
 			expired = true
+			log.Info("my checkAddOperator region expired, cancel add operator",
+				zap.Uint64("region-id", op.RegionID()))
 			operatorWaitCounter.WithLabelValues(op.Desc(), "add_canceled").Inc()
 		}
 	}
@@ -534,7 +559,7 @@ func (oc *OperatorController) buryOperator(op *operator.Operator, extraFields ..
 	switch st {
 	case operator.SUCCESS:
 		// If successful, remove this region from NewRegions.
-		if op.Kind() == operator.OpRegion || op.Kind() == operator.OpRegion | operator.OpLeader{
+		if op.Kind() == operator.OpRegion || op.Kind() == operator.OpRegion | operator.OpLeader {
 			isNew := false
 			for _, region := range oc.cluster.GetNewRegions() {
 				if region.GetID() == op.RegionID() {
@@ -575,7 +600,7 @@ func (oc *OperatorController) buryOperator(op *operator.Operator, extraFields ..
 			zap.Reflect("operator", op))
 		operatorCounter.WithLabelValues(op.Desc(), "timeout").Inc()
 	case operator.CANCELED:
-		if op.Kind() == operator.OpRegion || op.Kind() == operator.OpRegion | operator.OpLeader{
+		if op.Kind() == operator.OpRegion || op.Kind() == operator.OpRegion | operator.OpLeader {
 			isNew := false
 			for _, region := range oc.cluster.GetNewRegions() {
 				if region.GetID() == op.RegionID() {
