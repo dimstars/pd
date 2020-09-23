@@ -778,8 +778,12 @@ func (c *RaftCluster) RemoveNewRegion(regionID uint64) {
 	c.core.RemoveNewRegion(regionID)
 }
 
-func (c *RaftCluster) StopNewRegion(regionID uint64) {
-	c.core.StopNewRegion(regionID)
+func (c *RaftCluster) DisableNewRegion(regionID uint64) {
+	c.core.DisableNewRegion(regionID)
+}
+
+func (c *RaftCluster) EnableNewRegion(regionID uint64) {
+	c.core.EnableNewRegion(regionID)
 }
 
 func (c *RaftCluster) GetNewRegions() []*core.RegionInfo {

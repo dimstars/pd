@@ -148,15 +148,16 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) []*operator.Opera
 		for i := 0; i < balanceRegionRetryLimit; i++ {
 			// Select the new region first.
 			count := 0
+			//log.Info("my call RandNewRegion")
 			region := cluster.RandNewRegion(sourceID, s.conf.Ranges, opt.HealthAllowPending(cluster), opt.HealthRegion(cluster), opt.ReplicatedRegion(cluster))
 			if region == nil {
 				count++
-				log.Info("my RandNewRegion return isnil")
+				//log.Info("my RandNewRegion return isnil")
 				// Then pick the region that has a pending peer in the source store.
 				// Pending region may means the disk is overload, remove the pending region secondly.
 				region = cluster.RandPendingRegion(sourceID, s.conf.Ranges, opt.HealthAllowPending(cluster), opt.ReplicatedRegion(cluster))
 			} else {
-				log.Info("my RandNewRegion return notnil")
+				//log.Info("my RandNewRegion return notnil")
 			}
 			if region == nil {
 				count++
@@ -194,16 +195,16 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) []*operator.Opera
 				switch count {
 				case 0:
 					log.Info("my balance_region return new region")
-				case 1:
+				/*case 1:
 					log.Info("my balance_region return old region: pending")
 				case 2:
 					log.Info("my balance_region return old region: follower")
 				case 3:
 					log.Info("my balance_region return old region: leader")
 				case 4:
-					log.Info("my balance_region return old region: learner")
+					log.Info("my balance_region return old region: learner")*/
 				}
-				log.Info("my balance_region select region", zap.Uint64("region-id", op.RegionID()))
+				//log.Info("my balance_region select region", zap.Uint64("region-id", op.RegionID()))
 				if count > 0 {
 					isNew := false
 					for _, r := range cluster.GetNewRegions() {
@@ -219,7 +220,7 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) []*operator.Opera
 							zap.Uint64("region-id", op.RegionID()))
 					}
 				}
-				cluster.StopNewRegion(op.RegionID())
+				cluster.DisableNewRegion(op.RegionID())
 				return []*operator.Operator{op}
 			}
 		}

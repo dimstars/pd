@@ -32,6 +32,7 @@ type SelectConfig struct {
 	NewRegionFirst bool
 	NewProbability float64
 	MaxRegionCount int
+	TimeThreshold  uint64
 }
 
 // BasicCluster provides basic data member and interface for a tikv cluster.
@@ -59,6 +60,7 @@ func NewSelectConfig() *SelectConfig {
 		NewRegionFirst: true,
 		NewProbability: 0.0,
 		MaxRegionCount: 1000,
+		TimeThreshold:  60*10,
 	}
 }
 
@@ -202,7 +204,7 @@ func (bc *BasicCluster) RandNewRegion(storeID uint64, ranges []KeyRange, optPend
 		rand.Seed(time.Now().UnixNano())
 		p := float64(rand.Intn(100)+1) / 100.0
 		if p <= bc.SelectConf.NewProbability {
-			region := bc.NewRegions.randomRegion(storeID, ranges, randomRegionMaxRetry, optPending, optOther, optAll)
+			region := bc.NewRegions.randomRegion(storeID, ranges, optPending, optOther, optAll, bc.SelectConf.TimeThreshold)
 			bc.RUnlock()
 			return region
 		}
@@ -222,12 +224,18 @@ func (bc *BasicCluster) RemoveNewRegion(regionID uint64) {
 	bc.Unlock()
 }
 
-func (bc *BasicCluster) StopNewRegion(regionID uint64) {
+func (bc *BasicCluster) DisableNewRegion(regionID uint64) {
 	bc.Lock()
 	if bc.SelectConf.NewRegionFirst {
-		if region := bc.NewRegions.getRegion(regionID); region != nil {
-			bc.NewRegions.stop(region.GetID())
-		}
+		bc.NewRegions.disable(regionID)
+	}
+	bc.Unlock()
+}
+
+func (bc *BasicCluster) EnableNewRegion(regionID uint64) {
+	bc.Lock()
+	if bc.SelectConf.NewRegionFirst {
+		bc.NewRegions.enable(regionID)
 	}
 	bc.Unlock()
 }
@@ -394,10 +402,12 @@ func (bc *BasicCluster) PreCheckPutRegion(region *RegionInfo) (*RegionInfo, erro
 func (bc *BasicCluster) PutRegion(region *RegionInfo) []*RegionInfo {
 	bc.Lock()
 	defer bc.Unlock()
-	if bc.SelectConf.NewRegionFirst && (bc.Regions.GetRegion(region.GetID()) == nil || bc.NewRegions.getRegion(region.GetID()) != nil){
-		bc.NewRegions.update(region)
-		if bc.NewRegions.length() > bc.SelectConf.MaxRegionCount {
-			bc.NewRegions.pop()
+	if bc.SelectConf.NewRegionFirst && region.GetApproximateSize() > 1 {
+		if bc.Regions.GetRegion(region.GetID()) == nil || bc.NewRegions.getRegion(region.GetID()) != nil {
+			bc.NewRegions.update(region)
+			if bc.NewRegions.length() > bc.SelectConf.MaxRegionCount {
+				bc.NewRegions.pop()
+			}
 		}
 	}
 	return bc.Regions.SetRegion(region)
@@ -458,7 +468,8 @@ type RegionSetInformer interface {
 	GetRegionCount() int
 	RandNewRegion(storeID uint64, ranges []KeyRange, optPending RegionOption, optOther RegionOption, optAll RegionOption) *RegionInfo
 	RemoveNewRegion(regionID uint64)
-	StopNewRegion(regionID uint64)
+	DisableNewRegion(regionID uint64)
+	EnableNewRegion(regionID uint64)
 	GetNewRegions() []*RegionInfo
 	RandFollowerRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo
 	RandLeaderRegion(storeID uint64, ranges []KeyRange, opts ...RegionOption) *RegionInfo

@@ -12,12 +12,24 @@
 
 package core
 
-import "bytes"
+import (
+	"bytes"
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
+	"time"
+)
+
+type regionNode struct {
+	region    *RegionInfo
+	timestamp uint64
+	count     int
+	available bool
+}
 
 type regionQueueNode struct {
-	region *RegionInfo
-	pre    *regionQueueNode
-	next   *regionQueueNode
+	rNode *regionNode
+	pre   *regionQueueNode
+	next  *regionQueueNode
 }
 
 type regionQueue struct {
@@ -47,7 +59,7 @@ func (queue *regionQueue) getNode(regionID uint64) *regionQueueNode {
 // getRegion gets a RegionInfo from regionCache.
 func (queue *regionQueue) getRegion(regionID uint64) *RegionInfo {
 	if node, ok := queue.nodes[regionID]; ok {
-		return node.region
+		return node.rNode.region
 	}
 	return nil
 }
@@ -56,36 +68,49 @@ func (queue *regionQueue) getRegion(regionID uint64) *RegionInfo {
 func (queue *regionQueue) getRegions() []*RegionInfo {
 	var regions []*RegionInfo
 	for _, node := range queue.nodes {
-		regions = append(regions, node.region)
+		regions = append(regions, node.rNode.region)
 	}
 	return regions
 }
 
 // push adds region to the end of regionQueue.
-func (queue *regionQueue) push(region *RegionInfo) *regionQueueNode {
-	if region == nil {
+func (queue *regionQueue) push(rNode *regionNode) *regionQueueNode {
+	if rNode == nil {
 		return nil
 	}
 	if queue.start == nil {
 		queue.start = &regionQueueNode{
-			region: region,
-			pre:    nil,
-			next:   nil,
+			rNode: rNode,
+			pre:   nil,
+			next:  nil,
 		}
 		queue.len++
 		queue.end = queue.start
-		queue.nodes[region.GetID()] = queue.start
+		queue.nodes[rNode.region.GetID()] = queue.start
 		return queue.start
 	}
 	queue.end.next = &regionQueueNode{
-		region: region,
-		pre:    queue.end,
-		next:   nil,
+		rNode: rNode,
+		pre:   queue.end,
+		next:  nil,
 	}
 	queue.len++
 	queue.end = queue.end.next
-	queue.nodes[region.GetID()] = queue.end
+	queue.nodes[rNode.region.GetID()] = queue.end
 	return queue.end
+}
+
+func (queue *regionQueue) update(rNode *regionNode) *regionQueueNode {
+	if rNode == nil {
+		return nil
+	}
+	if node, ok := queue.nodes[rNode.region.GetID()]; ok {
+		node.rNode = rNode
+		return node
+	} else {
+		queue.push(rNode)
+	}
+	return nil
 }
 
 // pop deletes the first region in regionQueue and return it.
@@ -93,7 +118,7 @@ func (queue *regionQueue) pop() *RegionInfo {
 	if queue.start == nil {
 		return nil
 	}
-	region := queue.start.region
+	region := queue.start.rNode.region
 	queue.start = queue.start.next
 	if queue.start != nil {
 		queue.start.pre = nil
@@ -103,11 +128,14 @@ func (queue *regionQueue) pop() *RegionInfo {
 	return region
 }
 
-// removeNode deletes the regionQueueNode in regionQueue.
-func (queue *regionQueue) remove(regionID uint64) {
+// remove deletes the regionQueueNode in regionQueue.
+func (queue *regionQueue) remove(regionID uint64) bool {
+	if queue == nil {
+		return false
+	}
 	node := queue.getNode(regionID)
 	if node == nil {
-		return
+		return false
 	}
 	if node.pre != nil {
 		node.pre.next = node.next
@@ -121,23 +149,26 @@ func (queue *regionQueue) remove(regionID uint64) {
 	}
 	queue.len--
 	delete(queue.nodes, regionID)
+	return true
 }
 
 type regionCache struct {
-	regions      *regionQueue
-	leaders      *regionQueue
-	followers    *regionQueue
-	learners     *regionQueue
-	pendingPeers *regionQueue
+	regions       *regionQueue
+	leaders       map[uint64]*regionQueue
+	followers     map[uint64]*regionQueue
+	learners      map[uint64]*regionQueue
+	pendingPeers  map[uint64]*regionQueue
+	lastTimestamp uint64
 }
 
 func newRegionCache() *regionCache {
 	return &regionCache{
-		regions:      newRegionQueue(),
-		leaders:      newRegionQueue(),
-		followers:    newRegionQueue(),
-		learners:     newRegionQueue(),
-		pendingPeers: newRegionQueue(),
+		regions:       newRegionQueue(),
+		leaders:       make(map[uint64]*regionQueue),
+		followers:     make(map[uint64]*regionQueue),
+		learners:      make(map[uint64]*regionQueue),
+		pendingPeers:  make(map[uint64]*regionQueue),
+		lastTimestamp: uint64(time.Now().Unix()),
 	}
 }
 
@@ -160,98 +191,159 @@ func (cache *regionCache) update(region *RegionInfo) {
 	if region == nil {
 		return
 	}
-	if cache.getRegion(region.GetID()) != nil {
-		cache.remove(region.GetID())
+	var newRegionNode *regionNode
+	if node := cache.regions.getNode(region.GetID()); node != nil {
+		cache.removeSubQueue(node.rNode.region)
+		newRegionNode = node.rNode
+		newRegionNode.region = region
+	} else {
+		newRegionNode = &regionNode{
+			region:    region,
+			timestamp: uint64(time.Now().Unix()),
+			count:     0,
+			available: true,
+		}
+		cache.regions.push(newRegionNode)
 	}
-	cache.regions.push(region)
-	if region.GetPendingPeers() != nil {
-		cache.pendingPeers.push(region)
+
+	// Add to leaders and followers.
+	for _, peer := range region.GetVoters() {
+		storeID := peer.GetStoreId()
+		if peer.GetId() == region.leader.GetId() {
+			// Add leader peer to leaders.
+			store, ok := cache.leaders[storeID]
+			if !ok {
+				store = newRegionQueue()
+				cache.leaders[storeID] = store
+			}
+			store.update(newRegionNode)
+		} else {
+			// Add follower peer to followers.
+			store, ok := cache.followers[storeID]
+			if !ok {
+				store = newRegionQueue()
+				cache.followers[storeID] = store
+			}
+			store.update(newRegionNode)
+		}
 	}
-	if region.GetFollowers() != nil {
-		cache.followers.push(region)
+
+	// Add to learners.
+	for _, peer := range region.GetLearners() {
+		storeID := peer.GetStoreId()
+		store, ok := cache.learners[storeID]
+		if !ok {
+			store = newRegionQueue()
+			cache.learners[storeID] = store
+		}
+		store.update(newRegionNode)
 	}
-	if region.GetLeader() != nil {
-		cache.leaders.push(region)
-	}
-	if region.GetLearners() != nil {
-		cache.learners.push(region)
+
+	for _, peer := range region.pendingPeers {
+		storeID := peer.GetStoreId()
+		store, ok := cache.pendingPeers[storeID]
+		if !ok {
+			store = newRegionQueue()
+			cache.pendingPeers[storeID] = store
+		}
+		store.update(newRegionNode)
 	}
 }
 
 // remove deletes the region in regionCache.
 func (cache *regionCache) remove(regionID uint64) {
-	if cache.getRegion(regionID) != nil {
+	if region := cache.getRegion(regionID); region != nil {
+		cache.removeSubQueue(region)
 		cache.regions.remove(regionID)
-		cache.pendingPeers.remove(regionID)
-		cache.followers.remove(regionID)
-		cache.leaders.remove(regionID)
-		cache.learners.remove(regionID)
 	}
 }
 
-func (cache *regionCache) stop(regionID uint64) {
-	if cache.getRegion(regionID) != nil {
-		cache.pendingPeers.remove(regionID)
-		cache.followers.remove(regionID)
-		cache.leaders.remove(regionID)
-		cache.learners.remove(regionID)
+func (cache *regionCache) removeSubQueue(region *RegionInfo) {
+	for _, peer := range region.meta.Peers {
+		storeID := peer.GetStoreId()
+		if store, ok := cache.leaders[storeID]; ok {
+			store.remove(region.GetID())
+		}
+		if store, ok := cache.followers[storeID]; ok {
+			store.remove(region.GetID())
+		}
+		if store, ok := cache.learners[storeID]; ok {
+			store.remove(region.GetID())
+		}
+		if store, ok := cache.pendingPeers[storeID]; ok {
+			store.remove(region.GetID())
+		}
+	}
+}
+
+func (cache *regionCache) disable(regionID uint64) {
+	log.Info("my call disable", zap.Uint64("region-id", regionID))
+	if node := cache.regions.getNode(regionID); node != nil {
+		node.rNode.available = false
+		node.rNode.count++
+		if node.rNode.count >= len(node.rNode.region.GetPeers()) {
+			log.Info("my count-reach-limit", zap.Uint64("region-id", regionID))
+			cache.remove(regionID)
+		}
+	}
+}
+
+func (cache *regionCache) enable(regionID uint64) {
+	log.Info("my call enable", zap.Uint64("region-id", regionID))
+	if node := cache.regions.getNode(regionID); node != nil {
+		node.rNode.available = true
 	}
 }
 
 // pop deletes the oldest region and return it.
 func (cache *regionCache) pop() *RegionInfo {
 	if region := cache.regions.pop(); region != nil {
-		cache.pendingPeers.remove(region.GetID())
-		cache.followers.remove(region.GetID())
-		cache.leaders.remove(region.GetID())
-		cache.learners.remove(region.GetID())
+		cache.removeSubQueue(region)
 		return region
 	}
 	return nil
 }
 
 // randomRegion returns a random region from regionCache.
-func (cache *regionCache) randomRegion(storeID uint64, ranges []KeyRange, n int, optPending RegionOption, optOther RegionOption, optAll RegionOption) *RegionInfo {
+func (cache *regionCache) randomRegion(storeID uint64, ranges []KeyRange, optPending RegionOption, optOther RegionOption, optAll RegionOption, timeThreshold uint64) *RegionInfo {
+	now := uint64(time.Now().Unix())
+	if now-cache.lastTimestamp >= 10 && now-cache.lastTimestamp >= timeThreshold/100 {
+		cache.lastTimestamp = now
+		cache.Refresh(timeThreshold)
+	}
 	if len(ranges) == 0 {
 		ranges = []KeyRange{NewKeyRange("", "")}
 	}
 
-	for _, node := range cache.pendingPeers.nodes {
-		if !involved(node.region, ranges) {
-			continue
-		}
-		for _, peer := range node.region.GetPendingPeers() {
-			if peer.GetStoreId() == storeID && optPending(node.region) && optAll(node.region) {
-				return node.region
+	if store, ok := cache.pendingPeers[storeID]; ok {
+		for _, node := range store.nodes {
+			region := node.rNode.region
+			if node.rNode.available && optPending(region) && optAll(region) && involved(region, ranges) {
+				return region
 			}
 		}
 	}
-	for _, node := range cache.followers.nodes {
-		if !involved(node.region, ranges) {
-			continue
-		}
-		for _, peer := range node.region.GetFollowers() {
-			if peer.GetStoreId() == storeID && optOther(node.region) && optAll(node.region) {
-				return node.region
+	if store, ok := cache.followers[storeID]; ok {
+		for _, node := range store.nodes {
+			region := node.rNode.region
+			if node.rNode.available && optOther(region) && optAll(region) && involved(region, ranges) {
+				return region
 			}
 		}
 	}
-	for _, node := range cache.leaders.nodes {
-		if !involved(node.region, ranges) {
-			continue
-		}
-		peer := node.region.GetLeader()
-		if peer.GetStoreId() == storeID && optOther(node.region) && optAll(node.region) {
-			return node.region
+	if store, ok := cache.leaders[storeID]; ok {
+		for _, node := range store.nodes {
+			region := node.rNode.region
+			if node.rNode.available && optOther(region) && optAll(region) && involved(region, ranges) {
+				return region
+			}
 		}
 	}
-	for _, node := range cache.learners.nodes {
-		if !involved(node.region, ranges) {
-			continue
-		}
-		for _, peer := range node.region.GetLearners() {
-			if peer.GetStoreId() == storeID && optOther(node.region) && optAll(node.region) {
-				return node.region
+	if store, ok := cache.learners[storeID]; ok {
+		for _, node := range store.nodes {
+			region := node.rNode.region
+			if node.rNode.available && optOther(region) && optAll(region) && involved(region, ranges) {
+				return region
 			}
 		}
 	}
@@ -269,5 +361,22 @@ func involved(region *RegionInfo, ranges []KeyRange) bool {
 			return true
 		}
 	}
-	return false
+	return true
+}
+
+// Refresh removes old regions from regionCache.
+func (cache *regionCache) Refresh(timeThreshold uint64) {
+	log.Info("my call Refresh")
+	now := uint64(time.Now().Unix())
+	temp := cache.regions.start
+	for temp != nil {
+		if temp.rNode.timestamp < now - timeThreshold {
+			next := temp.next
+			cache.remove(temp.rNode.region.GetID())
+			log.Info("my out-of-date", zap.Uint64("region-id", temp.rNode.region.GetID()))
+			temp = next
+		} else {
+			break
+		}
+	}
 }

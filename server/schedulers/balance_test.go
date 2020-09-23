@@ -1115,7 +1115,7 @@ func (s *testScatterRangeLeaderSuite) TestBalanceWhenRegionNotHeartbeat(c *C) {
 }
 
 func (s *testBalanceRegionSchedulerSuite) TestBalanceNewRegion(c *C) {
-	opt := mockoption.NewScheduleOptions()
+	opt := config.NewTestOptions()
 	tc := mockcluster.NewCluster(opt)
 	oc := schedule.NewOperatorController(s.ctx, nil, nil)
 	hb, err := schedule.CreateScheduler(BalanceRegionType, oc, core.NewStorage(kv.NewMemoryKV()), schedule.ConfigSliceDecoder(BalanceRegionType, []string{"", ""}))

@@ -559,7 +559,7 @@ func (oc *OperatorController) buryOperator(op *operator.Operator, extraFields ..
 	switch st {
 	case operator.SUCCESS:
 		// If successful, remove this region from NewRegions.
-		if op.Kind() == operator.OpRegion || op.Kind() == operator.OpRegion | operator.OpLeader {
+		if op.Kind() == operator.OpRegion || op.Kind() == operator.OpRegion|operator.OpLeader {
 			isNew := false
 			for _, region := range oc.cluster.GetNewRegions() {
 				if region.GetID() == op.RegionID() {
@@ -573,7 +573,7 @@ func (oc *OperatorController) buryOperator(op *operator.Operator, extraFields ..
 				log.Info("my balance_region finish old",
 					zap.Uint64("region-id", op.RegionID()))
 			}
-			oc.cluster.RemoveNewRegion(op.RegionID())
+			oc.cluster.EnableNewRegion(op.RegionID())
 		}
 		log.Info("operator finish",
 			zap.Uint64("region-id", op.RegionID()),
@@ -600,7 +600,7 @@ func (oc *OperatorController) buryOperator(op *operator.Operator, extraFields ..
 			zap.Reflect("operator", op))
 		operatorCounter.WithLabelValues(op.Desc(), "timeout").Inc()
 	case operator.CANCELED:
-		if op.Kind() == operator.OpRegion || op.Kind() == operator.OpRegion | operator.OpLeader {
+		if op.Kind() == operator.OpRegion || op.Kind() == operator.OpRegion|operator.OpLeader {
 			isNew := false
 			for _, region := range oc.cluster.GetNewRegions() {
 				if region.GetID() == op.RegionID() {
@@ -614,7 +614,6 @@ func (oc *OperatorController) buryOperator(op *operator.Operator, extraFields ..
 				log.Info("my balance canceled old",
 					zap.Uint64("region-id", op.RegionID()))
 			}
-			oc.cluster.StopNewRegion(op.RegionID())
 		}
 		fields := []zap.Field{
 			zap.Uint64("region-id", op.RegionID()),
